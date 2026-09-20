@@ -1,0 +1,4 @@
+# gnopm's assembly, when running the tool on itself or on a demo in-tree
+/.gnopm/
+# the built binary
+/gnopm

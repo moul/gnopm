@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: the integration test builds a git repository and the
+      # tool itself resolves pinned commits, so a shallow clone is not enough.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+      - run: go build ./...
+      - run: go vet ./...
+      - run: gofmt -l . | tee /tmp/fmt && test ! -s /tmp/fmt
+      - run: go test ./...
+
+  # The integration test is also the demo: it builds a whole workspace from
+  # nothing and asserts at every step. Running it on its own makes a failure
+  # here obvious rather than buried in the unit test output.
+  demo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - run: ./scripts/demo.sh /tmp/gnopm-demo
+
+  install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      # Prove the documented install path works against this tree.
+      - run: go install ./... && gnopm version
