@@ -3,7 +3,7 @@
 [![CI](https://github.com/moul/gnopm/actions/workflows/ci.yml/badge.svg)](https://github.com/moul/gnopm/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/moul.io/gnopm.svg)](https://pkg.go.dev/moul.io/gnopm)
 [![Go Report Card](https://goreportcard.com/badge/moul.io/gnopm)](https://goreportcard.com/report/moul.io/gnopm)
-[![License](https://img.shields.io/github/license/moul/gnopm.svg)](./LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0%20%2F%20MIT-%2397ca00.svg)](#license)
 [![Latest release](https://img.shields.io/github/v/tag/moul/gnopm?label=version)](https://github.com/moul/gnopm/tags)
 [![Demo](https://img.shields.io/badge/demo-moul%2Fgnopm--demo-blue)](https://github.com/moul/gnopm-demo)
 
@@ -192,3 +192,9 @@ Direction, open questions and the roadmap live in the
 ## Dependencies
 
 None. The lock parser and the `h1:` hash are standard library.
+
+## License
+
+© 2026 [Manfred Touron](https://manfred.life)
+
+Licensed under the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0) ([`LICENSE-APACHE`](LICENSE-APACHE)) or the [MIT license](https://opensource.org/licenses/MIT) ([`LICENSE-MIT`](LICENSE-MIT)), at your option.
