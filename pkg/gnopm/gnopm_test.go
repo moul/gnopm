@@ -1024,3 +1024,67 @@ func TestNestedPackagesAreNotSwallowed(t *testing.T) {
 		t.Fatal("editing the nested package changed the outer package's hash")
 	}
 }
+
+// TestHelpAndVersionNeedNoWorkspace: `gnopm version` is the first thing anyone
+// runs after `go install moul.io/gnopm@latest`, and they run it from wherever
+// they happen to be standing. Resolving a workspace before dispatching turned
+// that documented install check into
+// `gnowork.toml not found in "." or any parent`, which is both wrong and the
+// worst possible first impression. Help has the same problem for the same
+// reason: you read it to find out what to do, which is exactly when you have
+// not set anything up yet.
+//
+// Every form goes through -C pointed at a directory that is deliberately not a
+// workspace, so the test does not depend on where `go test` was started from.
+// Asking a question must cost nothing: answer on stdout, silence on stderr,
+// no error.
+func TestHelpAndVersionNeedNoWorkspace(t *testing.T) {
+	outside := t.TempDir()
+	for _, args := range [][]string{
+		{"-C", outside, "version"},
+		{"-C", outside, "version", "-json"},
+		{"-v"},
+		{"--version"},
+		{"-C", outside, "help"},
+		{"-C", outside, "help", "status"},
+		{"-q", "help"},
+		{"-h", "status"},
+		// -h after the command name, where the flag package would otherwise
+		// print to stderr and exit 1.
+		{"-C", outside, "status", "-h"},
+		{"-C", outside, "ls", "--help"},
+		// A command with a required positional still answers -h without it.
+		{"-C", outside, "bump", "-h"},
+	} {
+		line := "gnopm " + strings.Join(args, " ")
+		var out, errw bytes.Buffer
+		if err := Run(args, &out, &errw); err != nil {
+			t.Errorf("%s: %v", line, err)
+			continue
+		}
+		if out.Len() == 0 {
+			t.Errorf("%s printed nothing to stdout", line)
+		}
+		if errw.Len() != 0 {
+			t.Errorf("%s wrote %q to stderr, an answer is not a diagnostic", line, errw.String())
+		}
+	}
+}
+
+// TestWorkspaceCommandsStillDemandAWorkspace is the other half: exempting
+// version and help from workspace resolution must not exempt anything that
+// reads one, or the error moves from an honest "gnowork.toml not found" to a
+// confusing failure deep inside a command working off an empty root.
+func TestWorkspaceCommandsStillDemandAWorkspace(t *testing.T) {
+	outside := t.TempDir()
+	for _, name := range []string{"status", "sync", "ls", "verify", "tidy", "env", "deversion"} {
+		err := Run([]string{"-C", outside, name}, &bytes.Buffer{}, &bytes.Buffer{})
+		if err == nil {
+			t.Errorf("gnopm %s ran with no workspace", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), workspaceMarker) {
+			t.Errorf("gnopm %s failed with %q, want it to name %s", name, err, workspaceMarker)
+		}
+	}
+}
