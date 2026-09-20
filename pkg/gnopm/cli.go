@@ -73,7 +73,11 @@ type command struct {
 	short   string
 	long    string
 	flags   func(*flag.FlagSet) // command-specific flags, may be nil
-	run     func(*Env, *flag.FlagSet, []string) error
+	// anywhere marks a command that does not need a workspace. `gnopm
+	// version` failing with "gnowork.toml not found" is absurd, and it is the
+	// first thing anyone runs after installing.
+	anywhere bool
+	run      func(*Env, *flag.FlagSet, []string) error
 }
 
 var commands []*command
@@ -199,9 +203,10 @@ with.`,
 			run: func(e *Env, fs *flag.FlagSet, args []string) error { return cmdEnv(e) },
 		},
 		{
-			name:  "version",
-			short: "print the gnopm version",
-			run:   func(e *Env, fs *flag.FlagSet, args []string) error { return cmdVersion(e) },
+			name:     "version",
+			anywhere: true,
+			short:    "print the gnopm version",
+			run:      func(e *Env, fs *flag.FlagSet, args []string) error { return cmdVersion(e) },
 		},
 		{
 			name:  "deversion",
@@ -393,9 +398,12 @@ func Run(args []string, out, errw io.Writer) error {
 		return err
 	}
 
-	root, err := FindRoot(*chdir)
-	if err != nil {
-		return err
+	root := ""
+	if !c.anywhere {
+		var err error
+		if root, err = FindRoot(*chdir); err != nil {
+			return err
+		}
 	}
 	e := &Env{Root: root, Out: out, Errw: errw, JSON: *jsonOut, Quiet: *quiet}
 	return c.run(e, fs, positional)
