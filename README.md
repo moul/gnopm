@@ -187,7 +187,7 @@ become a convention other gno repositories adopt, which is why it is named
 `gnomod.lock` and not `gnopm.lock`.
 
 Direction, open questions and the roadmap live in the
-[meta issue](https://github.com/moul/gnopm/issues/1).
+[meta issue](https://github.com/moul/gnopm/issues/2).
 
 ## Dependencies
 
