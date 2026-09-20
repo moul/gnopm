@@ -308,8 +308,12 @@ func commonPrefix(a, b string) int {
 // which would make the documented global options usable only AFTER the
 // command name. Having `-C` documented as global and then rejected in the one
 // position people actually type it is worse than not having it.
-func hoistGlobals(args []string) (name string, rest []string, err error) {
-	var globals []string
+//
+// globals and rest come back apart rather than already spliced together,
+// because help reads its topic straight off the front of rest. Handing it a
+// slice that still carried `-C somewhere` made `gnopm -C somewhere help`
+// answer `unknown command "-C"`.
+func hoistGlobals(args []string) (name string, globals, rest []string, err error) {
 	i := 0
 	for i < len(args) {
 		a := args[i]
@@ -317,10 +321,10 @@ func hoistGlobals(args []string) (name string, rest []string, err error) {
 			break
 		}
 		if a == "-h" || a == "--help" {
-			return "help", args[i+1:], nil
+			return "help", globals, args[i+1:], nil
 		}
 		if a == "-v" || a == "--version" {
-			return "version", nil, nil
+			return "version", globals, nil, nil
 		}
 		opt := strings.TrimLeft(a, "-")
 		if strings.Contains(opt, "=") {
@@ -331,7 +335,7 @@ func hoistGlobals(args []string) (name string, rest []string, err error) {
 		switch opt {
 		case "C":
 			if i+1 >= len(args) {
-				return "", nil, fmt.Errorf("-C needs a directory")
+				return "", nil, nil, fmt.Errorf("-C needs a directory")
 			}
 			globals = append(globals, a, args[i+1])
 			i += 2
@@ -339,13 +343,25 @@ func hoistGlobals(args []string) (name string, rest []string, err error) {
 			globals = append(globals, a)
 			i++
 		default:
-			return "", nil, fmt.Errorf("%q is not a global option. -C, -q and -json go anywhere; every other option goes after the command name", a)
+			return "", nil, nil, fmt.Errorf("%q is not a global option. -C, -q and -json go anywhere; every other option goes after the command name", a)
 		}
 	}
 	if i >= len(args) {
-		return "", globals, nil
+		return "", globals, nil, nil
 	}
-	return args[i], append(globals, args[i+1:]...), nil
+	return args[i], globals, args[i+1:], nil
+}
+
+// hasHelpFlag reports whether the arguments after a command name ask for that
+// command's help.
+func hasHelpFlag(args []string) bool {
+	for _, a := range args {
+		switch a {
+		case "-h", "--help", "-help":
+			return true
+		}
+	}
+	return false
 }
 
 func Run(args []string, out, errw io.Writer) error {
@@ -353,7 +369,7 @@ func Run(args []string, out, errw io.Writer) error {
 		usage(errw)
 		return nil
 	}
-	name, rest, err := hoistGlobals(args)
+	name, globals, rest, err := hoistGlobals(args)
 	if err != nil {
 		return err
 	}
@@ -382,6 +398,14 @@ func Run(args []string, out, errw io.Writer) error {
 		return fmt.Errorf("unknown command %q. Run `gnopm help`.", name)
 	}
 
+	// -h after the command name is a request for help, not a mistake. Left to
+	// the flag package it prints to stderr and exits 1, so `gnopm status -h`
+	// disagreed with `gnopm help status` about both stream and exit code.
+	if hasHelpFlag(rest) {
+		helpFor(out, c)
+		return nil
+	}
+
 	fs := flag.NewFlagSet("gnopm "+c.name, flag.ContinueOnError)
 	fs.SetOutput(errw)
 	fs.Usage = func() { helpFor(errw, c) }
@@ -393,7 +417,7 @@ func Run(args []string, out, errw io.Writer) error {
 	}
 	// Flags before or after the positional arguments, because insisting on one
 	// order is exactly the kind of thing that makes a CLI annoying.
-	positional, err := parseInterspersed(fs, rest)
+	positional, err := parseInterspersed(fs, append(globals, rest...))
 	if err != nil {
 		return err
 	}
