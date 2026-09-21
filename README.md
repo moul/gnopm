@@ -156,6 +156,26 @@ real payload. `-key`, `-rpc` and `-chainid` override any of it, and
 `-gnokey-cmd` emits a wrapper instead of plain `gnokey`. Where a chain parks submissions, a green broadcast is not a
 deployment, so `parked` is reported as its own state rather than as success.
 
+Asking a chain about two hundred packages is two hundred round trips, so the one
+answer that cannot change is kept. A path that is live on a chain stays live:
+there is no delete, and `addpkg` on an occupied path fails, so its bytes can
+never be redefined either. `~/.gnopm/live/<chain-id>` remembers those, one path
+per line, and later runs only ask about what is missing. Measured on a
+193-package workspace against `gnoland-1`: **5.8s** asking the chain everything,
+**0.67s** once the cache is warm, same script out.
+
+`parked` and `absent` are never remembered: a parked submission can still be
+enabled or rejected, and absent is the state of the very version you are about
+to publish. Neither is `chain-id = dev`, which is `gnodev`'s default and belongs
+to a chain that gets wiped and restarted under the same name.
+
+```sh
+gnopm publish -v          # say what is checked, and whether the chain or the cache answered
+gnopm publish -no-cache   # ask the chain everything
+GNOPM_CACHE=off gnopm …   # the same, for a whole shell; or point it elsewhere
+gnopm env                 # where the cache is, among everything else gnopm worked out
+```
+
 Full command reference: `gnopm help <command>`, or
 **[moul.github.io/gnopm](https://moul.github.io/gnopm/)**.
 

@@ -176,7 +176,7 @@ func TestHostForPath(t *testing.T) {
 // Discovery is skipped entirely when both are given, so a local gnodev with
 // no gnoweb in front of it still works, offline.
 func TestDiscoverChainHonoursOverridesWithoutNetwork(t *testing.T) {
-	c, err := DiscoverChain("nodomain/whatever", "http://127.0.0.1:26657", "dev")
+	c, err := DiscoverChain(&Env{}, "nodomain/whatever", "http://127.0.0.1:26657", "dev")
 	if err != nil {
 		t.Fatal(err)
 	}

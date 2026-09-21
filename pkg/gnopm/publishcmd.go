@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // plan is one package's publish plan.
@@ -31,10 +32,16 @@ type depBlock struct {
 }
 
 func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
+	started := time.Now()
+	// Deferred, so it is the last thing on stderr on every path out of here,
+	// including the one where a missing dependency stops the plan. A timing
+	// printed half way up the report is a timing for half the work.
+	defer func() { e.tracef("\ntiming   %s end to end\n", took(started)) }()
 	lock, err := readLock(e.Root)
 	if err != nil {
 		return err
 	}
+	e.tracef("lock     %s: %d module(s)\n", lockFile, len(lock.Modules))
 	pattern := ""
 	if len(args) > 0 {
 		pattern = args[0]
@@ -76,13 +83,19 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	if len(matched) == 0 {
 		return fmt.Errorf("no package in the working tree matches %q", pattern)
 	}
+	if pattern == "" {
+		e.tracef("select   %d package(s) in the working tree\n", len(matched))
+	} else {
+		e.tracef("select   %d of %d package(s) in the working tree match %q\n",
+			len(matched), len(treeOrder), pattern)
+	}
 
 	// Everything derived from "the package path" is derived from what the
 	// pattern actually named, never from a dependency dragged in below: a
 	// dependency can sit in another namespace, and guessing the key from it
 	// would name the wrong signer for the package you asked about.
 	primary := matched[0]
-	probe, err := NewProbe(primary, rpc, chainID)
+	probe, err := NewProbe(e, primary, rpc, chainID)
 	if err != nil {
 		return err
 	}
@@ -145,6 +158,12 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 			pkgs = append(pkgs, tree[mod])
 		}
 	}
+	edges := 0
+	for _, d := range deps {
+		edges += len(d)
+	}
+	e.tracef("imports  read %d package(s), %d %s-prefixed import(s), %d pulled in as a dependency\n",
+		len(deps), edges, domain, len(pulled))
 	ordered := TopoOrder(pkgs, deps)
 
 	inPlan := map[string]bool{}
@@ -154,15 +173,17 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 
 	// One batch, not one round trip per package. Everything the report needs
 	// to know from the chain is known here, before anything is asked, so the
-	// whole set goes up concurrently behind a bar. On a workspace of any size
-	// this is the difference between a few seconds and a minute of a terminal
-	// that looks hung.
+	// whole set goes up concurrently behind a bar, and whatever the cache
+	// already knows never leaves this machine. On a workspace of any size this
+	// is the difference between a few seconds and a minute of a terminal that
+	// looks hung.
 	var want []string
 	for _, p := range ordered {
 		want = append(want, p.Module)
 		want = append(want, deps[p.Module]...)
 	}
-	bar := newProgress(e.Errw, e.Quiet, "reading "+chain.ID)
+	e.tracef("chain    resolving %d path(s): every package and every import\n", len(want))
+	bar := newProgress(e, "reading "+chain.ID)
 	err = probe.Warm(want, bar.step)
 	bar.stop()
 	if err != nil {
@@ -220,6 +241,16 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	if !haveInert {
 		e.logf("note     vm/qinertpaths unavailable: this chain cannot park a\n" +
 			"         submission, so 'absent' really is absent\n")
+	}
+	// The cache line earns its place only when there is a cache and it did
+	// something. Reporting it under -no-cache would contradict the flag, and
+	// an always-on "0 answered from the cache" is the kind of line people stop
+	// reading. A first run says "0 answered, 188 learned", which is worth
+	// saying: it is the run that makes the next one fast.
+	if file := probe.Cache().where(); file != "" {
+		if _, hits, learned := probe.Cache().stats(); hits > 0 || learned > 0 {
+			e.logf("cache    %d answered from %s, %d learned\n", hits, file, learned)
+		}
 	}
 
 	todo, blocked := 0, 0

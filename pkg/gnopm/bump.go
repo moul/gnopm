@@ -56,7 +56,7 @@ func Bump(e *Env, target string, opts BumpOptions) error {
 	// to leave behind: an absent version was promised to nobody, so the change
 	// belongs inside it.
 	if opts.IfPublished {
-		bump, err := worthBumping(w, pkg, opts)
+		bump, err := worthBumping(e, w, pkg, opts)
 		if err != nil {
 			return err
 		}
@@ -227,8 +227,8 @@ type BumpOptions struct {
 // the answer, and the command that wants it is meant to sit in a script ahead
 // of an edit. Exiting non-zero would make every caller write `|| true` and
 // lose the real errors with it.
-func worthBumping(w io.Writer, pkg Package, opts BumpOptions) (bool, error) {
-	probe, err := NewProbe(pkg.Module, opts.RPC, opts.ChainID)
+func worthBumping(e *Env, w io.Writer, pkg Package, opts BumpOptions) (bool, error) {
+	probe, err := NewProbe(e, pkg.Module, opts.RPC, opts.ChainID)
 	if err != nil {
 		return false, err
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -48,6 +49,11 @@ func (f *fakeChain) count() int {
 
 func newFakeChain(t *testing.T) *fakeChain {
 	t.Helper()
+	// Every chain-reading test gets a cache directory of its own. Without this
+	// they would share the user's real ~/.gnopm, so a test that says v0 is live
+	// would make the next test's "v0 is absent" pass or fail depending on what
+	// ran before it, and `go test` would write to a developer's home.
+	t.Setenv(cacheEnv, t.TempDir())
 	f := &fakeChain{live: map[string]bool{}, parked: map[string]bool{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
@@ -96,6 +102,13 @@ func newFakeChain(t *testing.T) *fakeChain {
 	return f
 }
 
+// probeEnv is the Env a probe test runs under: output discarded, and a cache
+// directory of its own, so no test can see another's answers or a user's.
+func probeEnv(t *testing.T) *Env {
+	t.Helper()
+	return &Env{Out: io.Discard, Errw: io.Discard, CacheDir: t.TempDir()}
+}
+
 func writeABCIData(w http.ResponseWriter, data string) {
 	fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":{"response":{"ResponseBase":{"Data":%q}}}}`,
 		base64.StdEncoding.EncodeToString([]byte(data)))
@@ -118,7 +131,7 @@ func TestProbeSeparatesAnAnswerFromAFailure(t *testing.T) {
 	f := newFakeChain(t)
 	f.live["gno.land/p/moul/md/v0"] = true
 
-	p, err := NewProbe("gno.land/p/moul/md/v0", f.srv.URL, "test-1")
+	p, err := NewProbe(probeEnv(t), "gno.land/p/moul/md/v0", f.srv.URL, "test-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +172,7 @@ func TestProbeSeparatesAnAnswerFromAFailure(t *testing.T) {
 func TestProbeTreatsParkedAsPublished(t *testing.T) {
 	f := newFakeChain(t)
 	f.parked["gno.land/p/moul/md/v0"] = true
-	p, err := NewProbe("gno.land/p/moul/md/v0", f.srv.URL, "test-1")
+	p, err := NewProbe(probeEnv(t), "gno.land/p/moul/md/v0", f.srv.URL, "test-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +200,7 @@ func TestProbeTreatsParkedAsPublished(t *testing.T) {
 func TestProbeOnAChainThatCannotPark(t *testing.T) {
 	f := newFakeChain(t)
 	f.noInert = true
-	p, err := NewProbe("gno.land/p/moul/md/v0", f.srv.URL, "test-1")
+	p, err := NewProbe(probeEnv(t), "gno.land/p/moul/md/v0", f.srv.URL, "test-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +216,7 @@ func TestProbeOnAChainThatCannotPark(t *testing.T) {
 func TestProbeDoesNotMistakeADownChainForOneWithoutInert(t *testing.T) {
 	f := newFakeChain(t)
 	f.down = true
-	if _, err := NewProbe("gno.land/p/moul/md/v0", f.srv.URL, "test-1"); err == nil {
+	if _, err := NewProbe(probeEnv(t), "gno.land/p/moul/md/v0", f.srv.URL, "test-1"); err == nil {
 		t.Fatal("NewProbe against an unreachable chain should fail, not report a chain that cannot park")
 	}
 }
@@ -713,7 +726,7 @@ func TestProbeWarmAsksOncePerPathAndCachesTheAnswers(t *testing.T) {
 			f.live[m] = true
 		}
 	}
-	p, err := NewProbe(modules[0], f.srv.URL, "test-1")
+	p, err := NewProbe(probeEnv(t), modules[0], f.srv.URL, "test-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -774,7 +787,7 @@ func TestProbeWarmAsksOncePerPathAndCachesTheAnswers(t *testing.T) {
 // rather than let the rest of the workers fill the cache around it.
 func TestProbeWarmReportsATransportFailureRatherThanAbsence(t *testing.T) {
 	f := newFakeChain(t)
-	p, err := NewProbe("gno.land/p/moul/md/v0", f.srv.URL, "test-1")
+	p, err := NewProbe(probeEnv(t), "gno.land/p/moul/md/v0", f.srv.URL, "test-1")
 	if err != nil {
 		t.Fatal(err)
 	}
