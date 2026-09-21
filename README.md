@@ -49,6 +49,7 @@ gnopm sync        # make the state good
 gnopm bump md     # promote a package, in place; then edit the files
 gnopm ls          # every module and where its source is
 gnopm verify      # prove every pinned version still reproduces (for CI)
+gnopm publish     # what is missing on chain, as gnokey commands you can read
 ```
 
 <p align="center">
@@ -71,6 +72,22 @@ the plan first:
 gnopm deversion -n
 gnopm deversion
 ```
+
+`publish` reads the chain your paths point at, says what is **live**, **parked**
+or **absent** there, and writes the `gnokey` commands for the rest in dependency
+order. It never signs: the report goes to stderr and the script to stdout, so
+generating a plan is always safe and running it is a second, deliberate step.
+
+```sh
+gnopm publish                    # read it
+gnopm publish -key alice | sh    # then run it
+```
+
+It works out the chain from the package path (`gno.land/...` asks
+`https://gno.land` for its rpc and chain id, so there is no endpoint table),
+the order from each package's non-test imports, and gas, fee and deposit from
+the real payload. Where a chain parks submissions, a green broadcast is not a
+deployment, so `parked` is reported as its own state rather than as success.
 
 Full command reference: `gnopm help <command>`, or
 **[moul.github.io/gnopm](https://moul.github.io/gnopm/)**.
