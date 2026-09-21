@@ -54,8 +54,13 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	}
 	rpc, chainID := flagString(fs, "rpc"), flagString(fs, "chainid")
 	key := flagString(fs, "key")
-	if key == "" {
-		key = "$KEY" // a placeholder that fails loudly rather than signing with someone else's key
+	// The client is a command, not necessarily the binary called "gnokey": a
+	// wrapper that adds a keybase, a remote signer, or an agent session key is
+	// a normal thing to have, and hard-coding the name would force everyone
+	// using one to post-process the script.
+	gnokeyCmd := flagString(fs, "gnokey-cmd")
+	if gnokeyCmd == "" {
+		gnokeyCmd = "gnokey"
 	}
 
 	// Only packages whose source is in the working tree can be published: a
@@ -82,6 +87,18 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	domain := pkgs[0].Module
 	if i := strings.IndexByte(domain, '/'); i >= 0 {
 		domain = domain[:i]
+	}
+
+	// Detect, do not ask: a gno package path carries the namespace that owns
+	// it, and a namespace is a user, so `gno.land/r/alice/home` is alice's to
+	// publish and her key is overwhelmingly likely to be named `alice`. Guess
+	// it, print the guess, and let -key override. Requiring the flag would be
+	// friction paid on every invocation to restate what the path already says.
+	if key == "" {
+		key = namespaceOf(pkgs[0].Module)
+		if key == "" {
+			return fmt.Errorf("cannot tell which key to name from %q: pass -key", pkgs[0].Module)
+		}
 	}
 
 	deps := map[string][]string{}
@@ -140,6 +157,10 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	if chain.Host != "" {
 		e.logf("         discovered from %s\n", chain.Host)
 	}
+	e.logf("key      %s\n", key)
+	if gnokeyCmd != "gnokey" {
+		e.logf("client   %s\n", gnokeyCmd)
+	}
 	if !haveInert {
 		e.logf("note     vm/qinertpaths unavailable: this chain cannot park a\n" +
 			"         submission, so 'absent' really is absent\n")
@@ -185,7 +206,7 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 		e.printf("\n# %s: %d bytes, %d gas at %d/byte, fee %s at %s ugnot/gas\n",
 			pl.pkg.Module, pl.bytes, gas, gasPerByte, FeeFor(gas),
 			strconv.FormatFloat(float64(feeRatioMicro)/1e6, 'g', -1, 64))
-		e.printf("gnokey maketx addpkg \\\n")
+		e.printf("%s maketx addpkg \\\n", gnokeyCmd)
 		e.printf("  -pkgdir %s \\\n", shellQuote(e.Root+"/"+pl.pkg.Dir))
 		e.printf("  -pkgpath %s \\\n", shellQuote(pl.pkg.Module))
 		e.printf("  -gas-wanted %d \\\n", gas)
@@ -206,4 +227,16 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 // shellQuote makes a value safe as one single-quoted shell word.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// namespaceOf returns the namespace element of a gno package path, which is
+// the third: domain / kind / namespace / name. An address namespace
+// (gno.land/r/g1…) is returned as-is; it is a poor key name but a better
+// starting point than nothing, and -key exists for it.
+func namespaceOf(module string) string {
+	parts := strings.Split(module, "/")
+	if len(parts) < 3 {
+		return ""
+	}
+	return parts[2]
 }

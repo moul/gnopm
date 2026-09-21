@@ -166,13 +166,17 @@ The chain is discovered from the package path, so gno.land/... resolves to
 https://gno.land and the rpc and chain id it advertises. Override with -rpc
 and -chainid for a local gnodev.
 
-  -key      gnokey key name to put in the emitted commands (default "$KEY")
-  -rpc      RPC endpoint, skipping discovery
-  -chainid  chain id, skipping discovery`,
+  -key      gnokey key name for the emitted commands (default: the namespace
+            in the package path, since a namespace is its owner)
+  -rpc         RPC endpoint, skipping discovery
+  -chainid     chain id, skipping discovery
+  -gnokey-cmd  the client to emit, if not "gnokey": a wrapper, a path, or
+               anything taking the same arguments`,
 			flags: func(fs *flag.FlagSet) {
-				fs.String("key", "", "gnokey key name for the emitted commands")
+				fs.String("key", "", "gnokey key name (default: the namespace in the package path)")
 				fs.String("rpc", "", "RPC endpoint (default: discovered from the package path)")
 				fs.String("chainid", "", "chain id (default: discovered from the package path)")
+				fs.String("gnokey-cmd", "", `the client command to emit (default "gnokey")`)
 			},
 			run: cmdPublish,
 		},

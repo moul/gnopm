@@ -214,3 +214,22 @@ func TestShellQuote(t *testing.T) {
 		}
 	}
 }
+
+// Detect, do not ask: a required -key would be friction paid on every
+// invocation to restate what the package path already says. A gno namespace
+// is its owner, so the key name is the third path element.
+func TestNamespaceOf(t *testing.T) {
+	for in, want := range map[string]string{
+		"gno.land/r/moul/home":               "moul",
+		"gno.land/p/alice/md/v1":             "alice",
+		"gno.land/r/moul/x/daily/counter/v0": "moul",
+		"gno.land/r/g1abc/foo":               "g1abc",
+		"example.com/p/bob/lib/v0":           "bob",
+		"gno.land/r":                         "",
+		"":                                   "",
+	} {
+		if got := namespaceOf(in); got != want {
+			t.Errorf("namespaceOf(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

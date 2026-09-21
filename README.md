@@ -79,14 +79,16 @@ order. It never signs: the report goes to stderr and the script to stdout, so
 generating a plan is always safe and running it is a second, deliberate step.
 
 ```sh
-gnopm publish                    # read it
-gnopm publish -key alice | sh    # then run it
+gnopm publish           # read it
+gnopm publish | sh      # then run it
 ```
 
 It works out the chain from the package path (`gno.land/...` asks
 `https://gno.land` for its rpc and chain id, so there is no endpoint table),
-the order from each package's non-test imports, and gas, fee and deposit from
-the real payload. Where a chain parks submissions, a green broadcast is not a
+the key from the namespace in that same path (a namespace is its owner), the
+order from each package's non-test imports, and gas, fee and deposit from the
+real payload. `-key`, `-rpc` and `-chainid` override any of it, and
+`-gnokey-cmd` emits a wrapper instead of plain `gnokey`. Where a chain parks submissions, a green broadcast is not a
 deployment, so `parked` is reported as its own state rather than as success.
 
 Full command reference: `gnopm help <command>`, or
