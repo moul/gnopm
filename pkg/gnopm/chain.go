@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -168,9 +169,36 @@ func (c *Chain) ABCIQuery(path, data string) (string, error) {
 		return "", fmt.Errorf("rpc error: %s", string(*out.Error))
 	}
 	if e := out.Result.Response.ResponseBase.Error; e != nil {
-		return "", fmt.Errorf("%s: %s", e.Type, firstTrace(out.Result.Response.ResponseBase.Log))
+		return "", &ABCIError{Type: e.Type, Log: firstTrace(out.Result.Response.ResponseBase.Log)}
 	}
 	return string(out.Result.Response.ResponseBase.Data), nil
+}
+
+// ABCIError is an answer, not a failure: the query reached a node and the node
+// said no.
+//
+// It exists to be distinguishable from a transport error, and the distinction
+// is load-bearing wherever a chain answer gates a decision. "this chain does
+// not have that package" and "I could not reach that chain" must never land in
+// the same branch, or an unreachable node reads as an empty one and every
+// guard built on "it was never published" silently opens.
+type ABCIError struct {
+	Type string
+	Log  string
+}
+
+func (e *ABCIError) Error() string {
+	if e.Log == "" {
+		return e.Type
+	}
+	return e.Type + ": " + e.Log
+}
+
+// answered reports whether err is the chain saying no rather than the network
+// failing to ask.
+func answered(err error) bool {
+	var ae *ABCIError
+	return errors.As(err, &ae)
 }
 
 // firstTrace pulls the human-readable cause out of an ABCI error log, whose

@@ -200,7 +200,13 @@ func cmdBump(e *Env, fs *flag.FlagSet, args []string) error {
 	if err := Relock(e); err != nil {
 		return err
 	}
-	if err := Bump(e, args[0], flagInt(fs, "to"), flagBool(fs, "force")); err != nil {
+	if err := Bump(e, args[0], BumpOptions{
+		To:          flagInt(fs, "to"),
+		Force:       flagBool(fs, "force"),
+		IfPublished: flagBool(fs, "if-published"),
+		RPC:         flagString(fs, "rpc"),
+		ChainID:     flagString(fs, "chainid"),
+	}); err != nil {
 		return err
 	}
 	// And materialize the version just pinned, so whatever still imports it
@@ -316,4 +322,29 @@ func packageAtCwd(root string) (string, error) {
 	}
 	return "", fmt.Errorf("no package here, and none given. cd into one, or name it: `gnopm bump <package>`\n" +
 		"  `gnopm ls -q` lists them")
+}
+
+func cmdUnbump(e *Env, fs *flag.FlagSet, args []string) error {
+	if len(args) == 0 {
+		pkg, err := packageAtCwd(e.Root)
+		if err != nil {
+			return err
+		}
+		args = []string{pkg}
+		e.logf("unbumping %s (from the current directory)\n", pkg)
+	}
+	if len(args) > 1 {
+		return fmt.Errorf("unbump takes one package, got %d", len(args))
+	}
+	if err := Relock(e); err != nil {
+		return err
+	}
+	if err := Unbump(e, args[0], UnbumpOptions{
+		Force:   flagBool(fs, "force"),
+		RPC:     flagString(fs, "rpc"),
+		ChainID: flagString(fs, "chainid"),
+	}); err != nil {
+		return err
+	}
+	return Install(e)
 }

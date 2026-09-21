@@ -51,7 +51,7 @@ func TestCIFailsOnAStrandedPin(t *testing.T) {
 	gitCmd(t, root, "checkout", "-q", "-b", "feature")
 	write(t, filepath.Join(root, "p/moul/md/md.gno"), "package md // edited\n")
 	commit(t, root, "edit")
-	if err := Bump(&Env{Root: root, Out: &bytes.Buffer{}, Errw: &bytes.Buffer{}}, "md", 0, false); err != nil {
+	if err := Bump(&Env{Root: root, Out: &bytes.Buffer{}, Errw: &bytes.Buffer{}}, "md", BumpOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	commit(t, root, "bump")
@@ -85,7 +85,7 @@ func TestCIReportsWhatTheBranchDidToTheLock(t *testing.T) {
 	gitCmd(t, root, "update-ref", "refs/remotes/origin/main", "HEAD")
 
 	gitCmd(t, root, "checkout", "-q", "-b", "feature")
-	if err := Bump(&Env{Root: root, Out: &bytes.Buffer{}, Errw: &bytes.Buffer{}}, "md", 0, false); err != nil {
+	if err := Bump(&Env{Root: root, Out: &bytes.Buffer{}, Errw: &bytes.Buffer{}}, "md", BumpOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	commit(t, root, "bump md")

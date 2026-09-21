@@ -121,13 +121,51 @@ it is. Then you edit the files and git diffs them properly.
 Syncs before and after, so whatever still imports the outgoing version
 resolves again without a second command.
 
-  -to <n>  bump to v<n> instead of the next one
-  -force   allow uncommitted changes in the package`,
+Offline and literal: it does what you asked. -if-published is the
+opt-in that lets it decide for itself.
+
+  -to <n>         bump to v<n> instead of the next one
+  -force          allow uncommitted changes in the package
+  -if-published   bump only if the outgoing version is live or parked on
+                  the chain its path names. A version nobody could import
+                  is not worth a number, so an absent one is left alone
+                  for you to edit in place, and the command exits 0
+                  having done nothing. Costs one chain read.
+  -rpc, -chainid  skip chain discovery, for a local gnodev`,
 			flags: func(fs *flag.FlagSet) {
 				fs.Int("to", 0, "bump to this major version instead of the next one")
 				fs.Bool("force", false, "allow uncommitted changes in the package")
+				fs.Bool("if-published", false, "bump only if the outgoing version is on the chain")
+				fs.String("rpc", "", "RPC endpoint (default: discovered from the package path)")
+				fs.String("chainid", "", "chain id (default: discovered from the package path)")
 			},
 			run: cmdBump,
+		},
+		{
+			name: "unbump", args: "<package>",
+			short: "fold an unpublished version back into the one before it",
+			long: `The inverse of bump, for the bump that should not have happened.
+
+Two unpublished versions in a row is a number spent on nothing. A stack
+of pull requests produces it by default: the first bumps v0 to v1 and
+lands, the second is written against it, sees v1 taken and bumps to v2,
+and the package reaches a chain as v2 with v1 existing nowhere.
+
+unbump moves the module line back down and leaves the files alone, so
+the work lands inside the version that had not shipped yet.
+
+It reads the chain first and refuses in both directions, because a chain
+takes nothing back: a published version cannot be withdrawn, and a
+published version cannot be redefined by folding into it either.
+
+  -force          skip the chain check, for an unreachable chain
+  -rpc, -chainid  skip chain discovery, for a local gnodev`,
+			flags: func(fs *flag.FlagSet) {
+				fs.Bool("force", false, "skip the chain check")
+				fs.String("rpc", "", "RPC endpoint (default: discovered from the package path)")
+				fs.String("chainid", "", "chain id (default: discovered from the package path)")
+			},
+			run: cmdUnbump,
 		},
 		{
 			name: "ls", aliases: []string{"list"}, args: "[pattern]",
@@ -205,26 +243,49 @@ Needs full git history. A shallow clone has none of the pinned commits.
 		},
 		{
 			name:  "tidy",
-			short: "drop pinned versions nothing imports that never shipped",
-			long: `Removes a lock entry when BOTH are true: nothing in the workspace
-imports that version, and the commit it is pinned to never reached the
-default branch.
+			short: "make the whole workspace right, however long it takes",
+			long: `The heavy one. sync is the cheap, silent, idempotent command a
+Makefile prerequisite calls; tidy is the one you run when you want it
+right, and it is allowed to cost git walks and chain reads.
 
-Both, not either. A version nobody here imports may still be deployed
-and imported by somebody else, so "unused" alone is not permission to
-forget it. A version pinned to a commit that never reached the default
-branch, though, never existed for anyone outside the branch that made
-it.
+Four passes:
 
-That is the normal end state of a branch that adds v0 and then bumps to
-v1 before either has landed: the intermediate version is an editing
-artefact, not a release.
+  1. sync, so the lock describes the working tree and everything it
+     pins is materialized.
+  2. drop a pinned version when nothing imports it AND its commit never
+     reached the default branch, which together mean it existed for
+     nobody outside the branch that made it.
+  3. verify, the expensive proof: every pinned version is re-read out of
+     git history and re-hashed, so a rewritten or garbage-collected
+     commit is caught here rather than by whoever's build breaks next.
+     It runs after the drop, so it proves the tidied lock.
+  4. ask the chain which of these version numbers ever meant anything.
+     A version can sit on the default branch for months having been
+     published to nobody, and no local check can see that. Where a
+     version is absent and so is the one below it, the bump between them
+     was spent on nothing, and tidy names the unbump that folds it back.
 
-  -n   print what would go and change nothing`,
+It writes only what is safe to write unasked. Pass 4 reports: folding a
+version away changes a package's identity, so that stays a deliberate
+gnopm unbump, one package at a time.
+
+  -n              print what would change and change nothing
+  -offline        skip the chain pass
+  -rpc, -chainid  skip chain discovery, for a local gnodev`,
 			flags: func(fs *flag.FlagSet) {
-				fs.Bool("n", false, "print what would go and change nothing")
+				fs.Bool("n", false, "print what would change and change nothing")
+				fs.Bool("offline", false, "skip the chain pass")
+				fs.String("rpc", "", "RPC endpoint (default: discovered from the package path)")
+				fs.String("chainid", "", "chain id (default: discovered from the package path)")
 			},
-			run: func(e *Env, fs *flag.FlagSet, args []string) error { return Tidy(e, flagBool(fs, "n")) },
+			run: func(e *Env, fs *flag.FlagSet, args []string) error {
+				return Tidy(e, TidyOptions{
+					DryRun:  flagBool(fs, "n"),
+					Offline: flagBool(fs, "offline"),
+					RPC:     flagString(fs, "rpc"),
+					ChainID: flagString(fs, "chainid"),
+				})
+			},
 		},
 		{
 			name:  "env",
