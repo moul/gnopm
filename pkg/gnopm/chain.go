@@ -34,6 +34,28 @@ type Chain struct {
 	ID string
 }
 
+// httpClient is shared by every read in this file, and that is the point.
+//
+// ABCIQuery used to build an http.Client per call, so each of the N package
+// lookups a publish plan needs paid a fresh TCP connect and a fresh TLS
+// handshake against the same host. Reusing the connection turns a query from a
+// round trip plus a handshake into a round trip, which against a public
+// endpoint is most of the wall clock.
+//
+// MaxIdleConnsPerHost is the number that matters here, because every query in
+// a run goes to one host: the default of 2 would serialize the concurrent
+// probe back down to two connections and give away what the pool just bought.
+var httpClient = &http.Client{
+	Timeout: 30 * time.Second,
+	Transport: &http.Transport{
+		Proxy:               http.ProxyFromEnvironment,
+		MaxIdleConns:        4 * probeConcurrency,
+		MaxIdleConnsPerHost: probeConcurrency,
+		IdleConnTimeout:     90 * time.Second,
+		ForceAttemptHTTP2:   true,
+	},
+}
+
 var (
 	rpcMeta     = regexp.MustCompile(`<meta[^>]+name="gnoconnect:rpc"[^>]+content="([^"]+)"`)
 	chainIDMeta = regexp.MustCompile(`<meta[^>]+name="gnoconnect:chainid"[^>]+content="([^"]+)"`)
@@ -77,8 +99,7 @@ func DiscoverChain(module, rpc, chainID string) (*Chain, error) {
 		return withOverrides(cached, rpc, chainID), nil
 	}
 
-	client := &http.Client{Timeout: 20 * time.Second}
-	resp, err := client.Get(host)
+	resp, err := httpClient.Get(host)
 	if err != nil {
 		return nil, fmt.Errorf("discovering the chain at %s: %w "+
 			"(pass -rpc and -chainid to skip discovery)", host, err)
@@ -152,8 +173,7 @@ func (c *Chain) ABCIQuery(path, data string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Post(c.RPC, "application/json", bytes.NewReader(body))
+	resp, err := httpClient.Post(c.RPC, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("querying %s: %w", c.RPC, err)
 	}

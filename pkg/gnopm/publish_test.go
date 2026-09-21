@@ -1,6 +1,7 @@
 package gnopm
 
 import (
+	"bytes"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -231,5 +232,167 @@ func TestNamespaceOf(t *testing.T) {
 		if got := namespaceOf(in); got != want {
 			t.Errorf("namespaceOf(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// --- the publish plan, end to end against a fake chain -----------------------
+
+// publishPlan runs `gnopm publish` against a fake chain and returns the script,
+// the report, and whatever the command decided.
+func publishPlan(t *testing.T, root string, f *fakeChain, args ...string) (script, report string, err error) {
+	t.Helper()
+	var out, errw bytes.Buffer
+	full := append([]string{"publish", "-C", root, "-rpc", f.srv.URL, "-chainid", "test-1"}, args...)
+	err = Run(full, &out, &errw)
+	return out.String(), errw.String(), err
+}
+
+// chainRepo is three packages in a line: app imports lib imports base.
+func chainRepo(t *testing.T) string {
+	t.Helper()
+	root := newRepo(t)
+	addPkg(t, root, "p/moul/base", "gno.land/p/moul/base/v0",
+		"package base\n\nfunc B() string { return \"b\" }\n")
+	addPkg(t, root, "p/moul/lib", "gno.land/p/moul/lib/v0",
+		"package lib\n\nimport \"gno.land/p/moul/base/v0\"\n\nfunc L() string { return base.B() }\n")
+	addPkg(t, root, "r/moul/app", "gno.land/r/moul/app/v0",
+		"package app\n\nimport \"gno.land/p/moul/lib/v0\"\n\nfunc A() string { return lib.L() }\n")
+	commit(t, root, "seed")
+	mustRun(t, root, "sync")
+	return root
+}
+
+// TestPublishFollowsTheImportClosure.
+//
+// What went wrong: `gnopm publish gno.land/r/moul/x/reaper/v0` answered
+// "MISSING dependency, not live: gno.land/p/moul/ulist/v1" for a package
+// sitting in the same workspace, a few directories away. The pattern narrowed
+// the publish set to the one package it matched, and every import outside that
+// set was then judged against the chain alone, so a dependency this very run
+// could have published first read as somebody else's problem. The user was
+// left to work out the order by hand and run publish once per package, which
+// is the job the tool exists to do.
+//
+// Why no existing test could see it: every publish test ran without a pattern,
+// where the set is the whole workspace and the closure is a no-op.
+func TestPublishFollowsTheImportClosure(t *testing.T) {
+	root := chainRepo(t)
+	f := newFakeChain(t)
+
+	script, report, err := publishPlan(t, root, f, "r/moul/app")
+	if err != nil {
+		t.Fatalf("publish refused a workspace that can publish itself: %v\n%s", err, report)
+	}
+	for _, m := range []string{"gno.land/p/moul/base/v0", "gno.land/p/moul/lib/v0", "gno.land/r/moul/app/v0"} {
+		if !strings.Contains(script, "-pkgpath '"+m+"'") {
+			t.Fatalf("%s is not in the script:\n%s\n--- report ---\n%s", m, script, report)
+		}
+	}
+	base, lib, app := strings.Index(script, "p/moul/base/v0'"),
+		strings.Index(script, "p/moul/lib/v0'"),
+		strings.Index(script, "r/moul/app/v0'")
+	if !(base < lib && lib < app) {
+		t.Fatalf("not in dependency order (base %d, lib %d, app %d):\n%s", base, lib, app, script)
+	}
+	if strings.Contains(report, "BLOCKED") {
+		t.Fatalf("a dependency in the same workspace was reported as a blocker:\n%s", report)
+	}
+	// The two that no pattern matched are named as what they are, or their
+	// presence in the script is a surprise.
+	if !strings.Contains(report, "deps     2 package(s) added") {
+		t.Errorf("report does not say why base and lib are here:\n%s", report)
+	}
+	if strings.Count(report, "(dependency)") != 2 {
+		t.Errorf("report does not mark the pulled-in packages:\n%s", report)
+	}
+}
+
+// TestPublishLeavesALivedependencyAlone: the closure must not re-publish what
+// is already on chain. addpkg on an occupied path fails, so a script that
+// included it would stop at the first command and take the rest with it.
+func TestPublishSkipsALiveDependency(t *testing.T) {
+	root := chainRepo(t)
+	f := newFakeChain(t)
+	f.live["gno.land/p/moul/base/v0"] = true
+
+	script, report, err := publishPlan(t, root, f, "r/moul/app")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, report)
+	}
+	if strings.Contains(script, "p/moul/base/v0'") {
+		t.Fatalf("the script re-publishes a live package:\n%s", script)
+	}
+	if !strings.Contains(script, "p/moul/lib/v0'") || !strings.Contains(script, "r/moul/app/v0'") {
+		t.Fatalf("the script lost what is still absent:\n%s", script)
+	}
+}
+
+// TestPublishStillBlocksOnADependencyOutsideTheWorkspace: the closure resolves
+// against the working tree, and an import that is in neither the tree nor the
+// chain is genuinely not ours to publish. Following imports must not turn that
+// into a silent pass.
+func TestPublishStillBlocksOnADependencyOutsideTheWorkspace(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "r/moul/app", "gno.land/r/moul/app/v0",
+		"package app\n\nimport \"gno.land/p/stranger/thing/v0\"\n\nfunc A() { thing.T() }\n")
+	commit(t, root, "seed")
+	mustRun(t, root, "sync")
+	f := newFakeChain(t)
+
+	_, report, err := publishPlan(t, root, f, "app")
+	if err == nil {
+		t.Fatalf("publish emitted a script for a package whose import is nowhere:\n%s", report)
+	}
+	if !strings.Contains(report, "not live, and not in this workspace") {
+		t.Fatalf("report does not say why it is blocked:\n%s", report)
+	}
+}
+
+// TestPublishBlocksOnAParkedDependency.
+//
+// What went wrong: the old check skipped any dependency that was in the plan,
+// on the assumption that being in the plan meant being published first. A
+// parked package is in the plan and is NOT published by it: its bytes are
+// already submitted and waiting on an approver, so the script deliberately
+// leaves it alone. Its dependents were then emitted against a path that is not
+// live, which is a transaction that fails.
+//
+// Why no existing test could see it: parked was only ever tested on the
+// package being published, never on one it imports. This runs with no pattern
+// on purpose, which is the case the old check got wrong: with a pattern it
+// refused for the other reason, the closure it did not follow.
+func TestPublishBlocksOnAParkedDependency(t *testing.T) {
+	root := chainRepo(t)
+	f := newFakeChain(t)
+	f.parked["gno.land/p/moul/base/v0"] = true
+
+	_, report, err := publishPlan(t, root, f)
+	if err == nil {
+		t.Fatalf("publish queued a package behind one that is only parked:\n%s", report)
+	}
+	if !strings.Contains(report, "parked, not live until an approver enables it") {
+		t.Fatalf("report does not name the parked dependency:\n%s", report)
+	}
+}
+
+// TestPublishKeysOffWhatThePatternNamed: a dependency can live in another
+// namespace, and the key, the chain and the domain all come from the package
+// path. Taking them from the first package in the closure rather than from the
+// one the user named would sign somebody else's package with the wrong key.
+func TestPublishKeysOffWhatThePatternNamed(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "p/alice/base", "gno.land/p/alice/base/v0", "package base\n\nfunc B() {}\n")
+	addPkg(t, root, "r/moul/app", "gno.land/r/moul/app/v0",
+		"package app\n\nimport \"gno.land/p/alice/base/v0\"\n\nfunc A() { base.B() }\n")
+	commit(t, root, "seed")
+	mustRun(t, root, "sync")
+	f := newFakeChain(t)
+
+	_, report, err := publishPlan(t, root, f, "r/moul/app")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, report)
+	}
+	if !strings.Contains(report, "key      moul\n") {
+		t.Fatalf("key was guessed from a pulled-in dependency, not from what was named:\n%s", report)
 	}
 }

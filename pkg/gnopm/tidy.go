@@ -257,6 +257,22 @@ func tidyChain(e *Env, opts TidyOptions) error {
 	}
 	fmt.Fprintf(w, "chain        %s (%s)\n", probe.Chain().ID, probe.Chain().RPC)
 
+	// One batch before the loop, for the same reason publish does it: every
+	// path is known up front, the answers do not interact, and a workspace of
+	// a hundred packages is otherwise a hundred serial round trips with
+	// nothing on screen. The FirstFreeVersion walk below stays serial because
+	// each step decides whether there is a next one.
+	var want []string
+	for _, en := range tree {
+		want = append(want, en.Module)
+	}
+	bar := newProgress(e.Errw, e.Quiet, "reading "+probe.Chain().ID)
+	err = probe.Warm(want, bar.step)
+	bar.stop()
+	if err != nil {
+		return err
+	}
+
 	live, parked, absent := 0, 0, 0
 	var spent []string
 	for _, en := range tree {

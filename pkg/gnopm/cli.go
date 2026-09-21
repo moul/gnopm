@@ -197,8 +197,15 @@ report to stderr, so it can be reviewed and then piped:
   gnopm publish -key alice | sh    # run it, once you have read it
 
 An optional pattern filters by substring against the module path or its
-directory. Only packages whose source is in the working tree are considered:
-a version pinned to history exists to keep imports resolving.
+directory, and what it names brings its dependencies with it: a package
+cannot go up before what it imports, so naming one realm plans whatever it
+imports from this workspace too, ahead of it. Only an import that is in
+neither this workspace nor the chain stops the plan. Only packages whose
+source is in the working tree are considered: a version pinned to history
+exists to keep imports resolving.
+
+The chain is read in one concurrent batch behind a progress bar on stderr,
+not one blocking query per package.
 
 The chain is discovered from the package path, so gno.land/... resolves to
 https://gno.land and the rpc and chain id it advertises. Override with -rpc
