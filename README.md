@@ -54,7 +54,7 @@ line, so the directory does not have to repeat it.
 > import absent from the workspace genuinely fails to resolve, so resolution
 > really happens rather than being masked by a later error.
 
-**[gnopm.moul.io](https://moul.github.io/gnopm/)** has the same thing with pictures.
+**[moul.github.io/gnopm](https://moul.github.io/gnopm/)** has the same thing with pictures.
 
 ## Quickstart
 
