@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -30,15 +31,28 @@ type fakeChain struct {
 	// down makes every query fail at the transport, the case that must never
 	// be mistaken for "absent".
 	down bool
+
+	// mu guards calls, and live/parked against the concurrent reads Warm
+	// makes. Serial probing needed none of this; a batch does.
+	mu sync.Mutex
 	// calls counts queries, so a test can assert the caching.
 	calls int
+}
+
+// count reports the queries served so far.
+func (f *fakeChain) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
 }
 
 func newFakeChain(t *testing.T) *fakeChain {
 	t.Helper()
 	f := &fakeChain{live: map[string]bool{}, parked: map[string]bool{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
 		f.calls++
+		f.mu.Unlock()
 		if f.down {
 			http.Error(w, "gateway is having a day", http.StatusBadGateway)
 			return
@@ -66,7 +80,10 @@ func newFakeChain(t *testing.T) *fakeChain {
 			writeABCIData(w, strings.Join(paths, "\n"))
 		case "vm/qfile":
 			p := string(req.Params.Data)
-			if f.live[p] {
+			f.mu.Lock()
+			isLive := f.live[p]
+			f.mu.Unlock()
+			if isLive {
 				writeABCIData(w, "file.gno\ngnomod.toml")
 				return
 			}
@@ -122,12 +139,12 @@ func TestProbeSeparatesAnAnswerFromAFailure(t *testing.T) {
 	}
 
 	// Cached: asking again costs no call.
-	before := f.calls
+	before := f.count()
 	if _, err := p.State("gno.land/p/moul/md/v1"); err != nil {
 		t.Fatal(err)
 	}
-	if f.calls != before {
-		t.Fatalf("a second State() made %d more call(s); it should be cached", f.calls-before)
+	if f.count() != before {
+		t.Fatalf("a second State() made %d more call(s); it should be cached", f.count()-before)
 	}
 
 	f.down = true
@@ -293,8 +310,8 @@ func TestBumpStaysOfflineByDefault(t *testing.T) {
 	if err := Bump(testEnv(root, &bytes.Buffer{}), "md", BumpOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if f.calls != 0 {
-		t.Fatalf("a plain bump made %d chain call(s); it must make none", f.calls)
+	if f.count() != 0 {
+		t.Fatalf("a plain bump made %d chain call(s); it must make none", f.count())
 	}
 	if got := moduleLine(t, root, "p/moul/md"); got != "gno.land/p/moul/md/v1" {
 		t.Fatalf("module line is %q, want v1", got)
@@ -492,8 +509,8 @@ func TestUnbumpStopsAtV0(t *testing.T) {
 	if !strings.Contains(err.Error(), "already at v0") {
 		t.Fatalf("error does not explain: %v", err)
 	}
-	if f.calls != 0 {
-		t.Fatalf("unbump read the chain %d time(s) before working out there was nothing to do", f.calls)
+	if f.count() != 0 {
+		t.Fatalf("unbump read the chain %d time(s) before working out there was nothing to do", f.count())
 	}
 }
 
@@ -546,8 +563,8 @@ func TestUnbumpForceSkipsTheChain(t *testing.T) {
 	if err := Unbump(testEnv(root, &bytes.Buffer{}), "md", UnbumpOptions{Force: true, RPC: f.srv.URL, ChainID: "test-1"}); err != nil {
 		t.Fatal(err)
 	}
-	if f.calls != 0 {
-		t.Fatalf("-force still made %d chain call(s)", f.calls)
+	if f.count() != 0 {
+		t.Fatalf("-force still made %d chain call(s)", f.count())
 	}
 	if got := moduleLine(t, root, "p/moul/md"); got != "gno.land/p/moul/md/v0" {
 		t.Fatalf("module line is %q, want v0", got)
@@ -652,8 +669,8 @@ func TestTidyOfflineSkipsTheChain(t *testing.T) {
 	if err := Tidy(testEnv(root, &out), TidyOptions{Offline: true, RPC: f.srv.URL, ChainID: "test-1"}); err != nil {
 		t.Fatal(err)
 	}
-	if f.calls != 0 {
-		t.Fatalf("-offline made %d chain call(s)", f.calls)
+	if f.count() != 0 {
+		t.Fatalf("-offline made %d chain call(s)", f.count())
 	}
 	if !strings.Contains(out.String(), "skipped (-offline)") {
 		t.Fatalf("tidy did not say it skipped the chain:\n%s", out.String())
@@ -677,5 +694,108 @@ func TestTidyDryRunWritesNothing(t *testing.T) {
 	}
 	if !bytes.Equal(before, after) {
 		t.Fatalf("-n rewrote %s", lockFile)
+	}
+}
+
+// TestProbeWarmAsksOncePerPathAndCachesTheAnswers.
+//
+// Reading a chain about N packages was N blocking round trips, one after the
+// other, which on a real workspace is a minute of a terminal that looks hung.
+// Nothing about the answers interacts, so the batch parallelizes exactly; what
+// it must not do is ask twice, or leave State to ask again afterwards.
+func TestProbeWarmAsksOncePerPathAndCachesTheAnswers(t *testing.T) {
+	f := newFakeChain(t)
+	modules := []string{}
+	for i := 0; i < 12; i++ {
+		m := fmt.Sprintf("gno.land/p/moul/pkg%02d/v0", i)
+		modules = append(modules, m)
+		if i%2 == 0 {
+			f.live[m] = true
+		}
+	}
+	p, err := NewProbe(modules[0], f.srv.URL, "test-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterInert := f.count() // the one vm/qinertpaths read NewProbe makes
+
+	var mu sync.Mutex
+	var seen []string
+	totals := map[int]bool{}
+	// The same path twice, and a duplicate of one already asked for: neither
+	// should cost a query.
+	if err := p.Warm(append(modules, modules[0], modules[3]), func(done, total int, m string) {
+		mu.Lock()
+		defer mu.Unlock()
+		seen = append(seen, m)
+		totals[total] = true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.count() - afterInert; got != len(modules) {
+		t.Fatalf("Warm made %d queries for %d distinct paths", got, len(modules))
+	}
+	if len(seen) != len(modules) {
+		t.Fatalf("step was called %d time(s), want %d", len(seen), len(modules))
+	}
+	if len(totals) != 1 || !totals[len(modules)] {
+		t.Fatalf("step reported totals %v, want only %d", totals, len(modules))
+	}
+
+	before := f.count()
+	for i, m := range modules {
+		s, err := p.State(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := StateAbsent
+		if i%2 == 0 {
+			want = StateLive
+		}
+		if s != want {
+			t.Fatalf("State(%s) = %s, want %s", m, s, want)
+		}
+	}
+	if f.count() != before {
+		t.Fatalf("State went back to the chain %d time(s) after Warm", f.count()-before)
+	}
+	// A second Warm over the same set is free.
+	if err := p.Warm(modules, nil); err != nil {
+		t.Fatal(err)
+	}
+	if f.count() != before {
+		t.Fatalf("a second Warm made %d more query/queries", f.count()-before)
+	}
+}
+
+// Claim 7, in the batch: a chain that cannot be reached must not come back as
+// a set of absent packages. Serial probing got this right because a single
+// error stopped it; a batch has to carry the first transport failure out
+// rather than let the rest of the workers fill the cache around it.
+func TestProbeWarmReportsATransportFailureRatherThanAbsence(t *testing.T) {
+	f := newFakeChain(t)
+	p, err := NewProbe("gno.land/p/moul/md/v0", f.srv.URL, "test-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.down = true
+	modules := []string{}
+	for i := 0; i < 12; i++ {
+		modules = append(modules, fmt.Sprintf("gno.land/p/moul/pkg%02d/v0", i))
+	}
+	err = p.Warm(modules, nil)
+	if err == nil {
+		t.Fatal("Warm read an unreachable chain as a workspace of absent packages")
+	}
+	if answered(err) {
+		t.Fatalf("a transport failure came back as a chain answer: %v", err)
+	}
+	// Nothing may be cached from a failed batch, or the next State returns an
+	// answer the chain never gave.
+	p.mu.Lock()
+	n := len(p.cache)
+	p.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("a failed batch cached %d state(s)", n)
 	}
 }

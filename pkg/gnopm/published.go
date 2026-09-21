@@ -2,7 +2,9 @@ package gnopm
 
 import (
 	"fmt"
+	"sort"
 	"strings"
+	"sync"
 )
 
 // Has this version been published, and therefore does its number mean anything.
@@ -24,8 +26,22 @@ type Probe struct {
 	chain     *Chain
 	inert     map[string]bool
 	haveInert bool
-	cache     map[string]PackageState
+
+	// mu guards cache alone. inert and haveInert are written once by NewProbe
+	// and read-only afterwards, which is what lets Warm share them across
+	// workers without a lock on the hot path.
+	mu    sync.Mutex
+	cache map[string]PackageState
 }
+
+// probeConcurrency is how many chain reads are in flight at once.
+//
+// The ceiling is not the local machine, it is the public endpoint: a chain
+// read is cheap for a node and a stranger's node is not ours to hammer. Eight
+// turns a minute of serial round trips into a few seconds and stays well under
+// any rate limit worth having. MaxIdleConnsPerHost is set to the same number,
+// so every worker gets a connection and none of them handshakes twice.
+const probeConcurrency = 8
 
 // NewProbe resolves the chain a module path names and prepares to query it.
 // rpc and chainID skip discovery, for a local gnodev.
@@ -56,15 +72,106 @@ func (p *Probe) CanPark() bool { return p.haveInert }
 // package" returns StateAbsent with a nil error, and a chain that could not be
 // reached returns an error rather than pretending the package is absent.
 func (p *Probe) State(module string) (PackageState, error) {
-	if s, ok := p.cache[module]; ok {
+	p.mu.Lock()
+	s, ok := p.cache[module]
+	p.mu.Unlock()
+	if ok {
 		return s, nil
 	}
 	s, err := stateOf(p.chain, module, p.inert)
 	if err != nil {
 		return "", err
 	}
+	p.mu.Lock()
 	p.cache[module] = s
+	p.mu.Unlock()
 	return s, nil
+}
+
+// Warm resolves many module paths at once and fills the cache, so that the
+// State calls which follow are local.
+//
+// This exists because the shape of the work is a batch: publish knows every
+// path it cares about before it asks about any of them, and asking serially
+// spends one network round trip per package for no reason. Nothing about the
+// answers interacts, so the batch parallelizes exactly.
+//
+// step, when non-nil, is called once per completed query with a running count
+// and the path just resolved. It is called from several goroutines, so an
+// implementation has to be safe for that; progress.step is.
+//
+// The error is the first transport failure, and the batch stops asking once it
+// has one. A chain answer is never an error here, same as State: the point of
+// the distinction is that an unreachable node must not read as an empty one.
+func (p *Probe) Warm(modules []string, step func(done, total int, module string)) error {
+	seen := map[string]bool{}
+	var todo []string
+	p.mu.Lock()
+	for _, m := range modules {
+		if _, cached := p.cache[m]; cached || seen[m] {
+			continue
+		}
+		seen[m] = true
+		todo = append(todo, m)
+	}
+	p.mu.Unlock()
+	if len(todo) == 0 {
+		return nil
+	}
+	// Sorted so the path shown next to the bar advances in a readable order
+	// rather than in whichever order the lock happened to hold.
+	sort.Strings(todo)
+
+	workers := probeConcurrency
+	if len(todo) < workers {
+		workers = len(todo)
+	}
+	work := make(chan string)
+	var (
+		wg       sync.WaitGroup
+		errMu    sync.Mutex
+		firstErr error
+		done     int
+	)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for m := range work {
+				errMu.Lock()
+				stop := firstErr != nil
+				errMu.Unlock()
+				if stop {
+					continue // drain, so the producer is never left blocked
+				}
+				s, err := stateOf(p.chain, m, p.inert)
+				if err != nil {
+					errMu.Lock()
+					if firstErr == nil {
+						firstErr = err
+					}
+					errMu.Unlock()
+					continue
+				}
+				p.mu.Lock()
+				p.cache[m] = s
+				p.mu.Unlock()
+				if step != nil {
+					errMu.Lock()
+					done++
+					n := done
+					errMu.Unlock()
+					step(n, len(todo), m)
+				}
+			}
+		}()
+	}
+	for _, m := range todo {
+		work <- m
+	}
+	close(work)
+	wg.Wait()
+	return firstErr
 }
 
 // Published reports whether the chain has this version in any form a later

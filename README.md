@@ -136,9 +136,17 @@ order. It never signs: the report goes to stderr and the script to stdout, so
 generating a plan is always safe and running it is a second, deliberate step.
 
 ```sh
-gnopm publish           # read it
-gnopm publish | sh      # then run it
+gnopm publish                # the whole workspace
+gnopm publish r/moul/reaper  # one package, and what it imports from here
+gnopm publish | sh           # then run it
 ```
+
+Naming one package plans its in-tree dependencies too, ahead of it: a
+dependency you could publish yourself is not a missing dependency. Only an
+import that is in neither this workspace nor the chain stops the plan. The
+chain is read in one concurrent batch behind a progress bar, so a hundred
+packages is a few seconds and not a minute (measured against `gnoland-1` on
+2026-09-21: 47s down to 6s over 178 paths).
 
 It works out the chain from the package path (`gno.land/...` asks
 `https://gno.land` for its rpc and chain id, so there is no endpoint table),
