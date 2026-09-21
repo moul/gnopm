@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="708" height="330" viewBox="0 0 708 330" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13">
+<rect width="708" height="330" rx="10" fill="#11131a"/>
+<rect width="708" height="34" rx="10" fill="#0d1117"/>
+<rect y="24" width="708" height="10" fill="#0d1117"/>
+<circle cx="18" cy="17.0" r="5.5" fill="#ff5f56"/>
+<circle cx="36" cy="17.0" r="5.5" fill="#ffbd2e"/>
+<circle cx="54" cy="17.0" r="5.5" fill="#27c93f"/>
+<text x="354.0" y="21.5" fill="#8b949e" text-anchor="middle" font-size="12">gnopm bump: one line, not a copied directory</text>
+<text x="18" y="56" fill="#7ee787">$</text>
+<text x="34.8" y="56" fill="#d2a8ff">gnopm bump set</text>
+<text x="18" y="76" fill="#c9d1d9" xml:space="preserve">bumped p/demo/set</text>
+<text x="18" y="96" fill="#8b949e" xml:space="preserve">  gno.land/p/demo/set/v0 -&gt; gno.land/p/demo/set/v1</text>
+<text x="18" y="116" fill="#8b949e" xml:space="preserve">  p/demo/set/gnomod.toml: one-line module change, files unchanged</text>
+<text x="18" y="136" fill="#8b949e" xml:space="preserve">  gnomod.lock: v0 pinned at ed22e7b91294 (main)</text>
+<text x="18" y="176" fill="#c9d1d9" xml:space="preserve">now edit p/demo/set in place. Importers of gno.land/p/demo/set/v0 still resolve.</text>
+<text x="18" y="196" fill="#c9d1d9" xml:space="preserve">assembly updated: 4 materialized (1 extracted, 3 cached, 0 pruned)</text>
+<text x="18" y="236" fill="#7ee787">$</text>
+<text x="34.8" y="236" fill="#d2a8ff">git diff --stat</text>
+<text x="18" y="256" fill="#c9d1d9" xml:space="preserve">gnomod.lock            | 5 +++++</text>
+<text x="18" y="276" fill="#c9d1d9" xml:space="preserve">p/demo/set/gnomod.toml | 2 +-</text>
+<text x="18" y="296" fill="#c9d1d9" xml:space="preserve">2 files changed, 6 insertions(+), 1 deletion(-)</text>
+</svg>

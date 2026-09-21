@@ -18,6 +18,10 @@ p/alice/md/gnomod.toml     module = "gno.land/p/alice/md/v1"
 p/alice/md/md.gno          edited in place
 ```
 
+<p align="center">
+  <img src="docs/img/bump.svg" alt="gnopm bump changes one line in gnomod.toml, and git records a real diff" width="760">
+</p>
+
 `p/alice/md/` publishes to `gno.land/p/alice/md/v1`. There is no `v1/`
 directory, and there never was a `v0/` one either: `v0` is pinned in
 `gnomod.lock` to a commit, and `gnopm sync` rebuilds it under `.gnopm/` for
@@ -50,7 +54,13 @@ line, so the directory does not have to repeat it.
 > import absent from the workspace genuinely fails to resolve, so resolution
 > really happens rather than being masked by a later error.
 
+**[gnopm.moul.io](https://moul.github.io/gnopm/)** has the same thing with pictures.
+
 ## Quickstart
+
+<p align="center">
+  <img src="docs/img/status.svg" alt="gnopm status" width="560">
+</p>
 
 ```sh
 gnopm status      # what resolves, and whether anything is out of date
@@ -64,12 +74,20 @@ Two of those are the ones you type: `status` to ask, `sync` to fix. There is no
 separate "write the lock" and "fetch the versions" step, because having both
 only raises the question of which one you wanted.
 
+<p align="center">
+  <img src="docs/img/ls.svg" alt="gnopm ls showing where each version's source is" width="760">
+</p>
+
 Migrating a repository that still has versioned directories:
 
 ```sh
 gnopm deversion -n    # the plan
 gnopm deversion       # do it, as git renames
 ```
+
+<p align="center">
+  <img src="docs/img/deversion.svg" alt="gnopm deversion -n printing the migration plan" width="760">
+</p>
 
 ## Commands
 
@@ -149,6 +167,10 @@ commits never become ancestors of the default branch and are unreachable in a
 fresh clone once the branch is deleted. A version pinned to a branch `HEAD`
 stops resolving the moment the change lands.
 
+<p align="center">
+  <img src="docs/img/verify.svg" alt="gnopm verify refusing a pin a squash merge would strand" width="860">
+</p>
+
 So pins go to a commit **already on the default branch** holding
 byte-identical content, and `verify` fails when one does not, with the remedy:
 bump *before* editing, or `gnopm tidy` if the stranded version never shipped
@@ -168,6 +190,18 @@ Everything is in packages so other programs do not have to shell out:
 
 The repository root is the command and a high-level integration test, nothing
 else.
+
+## The pictures cannot rot either
+
+Every terminal image above is generated from **real command output** by
+[`scripts/screenshots.sh`](./scripts/screenshots.sh), including the failing
+`verify`, which is produced by actually making the mistake it catches. A
+screenshot taken by hand stops matching the tool the first time an output line
+changes and nobody notices.
+
+```sh
+./scripts/screenshots.sh
+```
 
 ## The demo is the integration test
 

@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>gnopm — a package manager for gno workspaces</title>
+<meta name="description" content="gnopm keeps a gno package's version in gnomod.toml instead of in its directory name, so a version bump is a one-line change plus a real diff instead of a copied directory git cannot pair.">
+<meta property="og:title" content="gnopm">
+<meta property="og:description" content="A package manager for gno workspaces. The version lives in gnomod.toml, not in the directory name.">
+<meta property="og:type" content="website">
+<style>
+  :root{--bg:#0d1117;--panel:#11131a;--fg:#c9d1d9;--dim:#8b949e;--acc:#7ee787;--acc2:#d2a8ff;--line:#21262d}
+  @media (prefers-color-scheme: light){
+    :root{--bg:#fff;--panel:#f6f8fa;--fg:#1f2328;--dim:#59636e;--acc:#1a7f37;--acc2:#8250df;--line:#d1d9e0}
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+  .wrap{max-width:860px;margin:0 auto;padding:0 20px 80px}
+  header{padding:64px 0 28px;border-bottom:1px solid var(--line)}
+  h1{font-size:44px;margin:0 0 6px;letter-spacing:-.02em}
+  h1 span{color:var(--acc)}
+  .tag{color:var(--dim);font-size:19px;margin:0 0 22px}
+  .badges img{height:20px;margin:0 6px 6px 0;vertical-align:middle}
+  h2{margin:44px 0 12px;font-size:24px;letter-spacing:-.01em}
+  h3{margin:28px 0 8px;font-size:17px;color:var(--dim);font-weight:600}
+  p{margin:0 0 14px}
+  a{color:var(--acc2)}
+  code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13.5px}
+  code{background:var(--panel);padding:2px 6px;border-radius:5px}
+  pre{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:14px 16px;overflow-x:auto}
+  pre code{background:none;padding:0}
+  img.shot{width:100%;max-width:100%;border-radius:10px;margin:8px 0 6px;display:block}
+  figure{margin:0 0 26px}
+  figcaption{color:var(--dim);font-size:14px}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:680px){.cols{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .card h4{margin:0 0 6px;font-size:15px}
+  .card p{margin:0;color:var(--dim);font-size:14.5px}
+  footer{margin-top:56px;padding-top:20px;border-top:1px solid var(--line);color:var(--dim);font-size:14px}
+  .lede{font-size:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>gno<span>pm</span></h1>
+  <p class="tag">A package manager for <a href="https://gno.land">gno</a> workspaces.</p>
+  <p class="badges">
+    <a href="https://github.com/moul/gnopm/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/moul/gnopm/actions/workflows/ci.yml/badge.svg"></a>
+    <a href="https://pkg.go.dev/moul.io/gnopm"><img alt="Go Reference" src="https://pkg.go.dev/badge/moul.io/gnopm.svg"></a>
+    <a href="https://goreportcard.com/report/moul.io/gnopm"><img alt="Go Report Card" src="https://goreportcard.com/badge/moul.io/gnopm"></a>
+    <a href="https://github.com/moul/gnopm#license"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0%20%2F%20MIT-%2397ca00.svg"></a>
+    <a href="https://github.com/moul/gnopm"><img alt="GitHub" src="https://img.shields.io/badge/github-moul%2Fgnopm-blue"></a>
+  </p>
+  <pre><code>go install moul.io/gnopm@latest</code></pre>
+</header>
+
+<h2>The version belongs in <code>gnomod.toml</code></h2>
+<p class="lede">A gno package path ends in its version, so the obvious layout gives each
+version its own directory. Bumping then means copying the directory and editing the copy.</p>
+<p><strong>git cannot pair a copy.</strong> The review diff of a version bump becomes a set of
+added files with no content diff at all, which is backwards: a bump is by definition the
+compatibility change that most needs reviewing, and it is the one change you cannot see.
+<code>git log --follow</code>, <code>blame</code> and <code>bisect</code> all stop at the copy
+too. One real port of 25 realms landed as <strong>+11,103 / −0 across 112 files</strong>, with
+every behaviour change invisible.</p>
+<p>gnopm removes the copy. The toolchain already reads the version from the module line, so the
+directory does not have to repeat it.</p>
+
+<pre><code>p/alice/md/gnomod.toml     module = "gno.land/p/alice/md/v1"
+p/alice/md/md.gno          edited in place</code></pre>
+
+<h2>What that looks like</h2>
+
+<figure>
+  <img class="shot" src="img/bump.svg" alt="gnopm bump changes one line in gnomod.toml, and git records a real diff">
+  <figcaption>A bump is one line in <code>gnomod.toml</code>. Then you edit the files, and git
+  diffs them.</figcaption>
+</figure>
+
+<figure>
+  <img class="shot" src="img/status.svg" alt="gnopm status">
+  <figcaption><code>status</code> to ask, <code>sync</code> to fix. Those are the two you
+  type.</figcaption>
+</figure>
+
+<figure>
+  <img class="shot" src="img/ls.svg" alt="gnopm ls showing where each version's source is">
+  <figcaption>Versions with no directory left are rebuilt from the commit that still holds
+  them.</figcaption>
+</figure>
+
+<figure>
+  <img class="shot" src="img/verify.svg" alt="gnopm verify refusing a pin that a squash merge would strand">
+  <figcaption>Most repositories squash-merge, so a version pinned to a branch commit stops
+  resolving the moment the change lands. <code>verify</code> catches that while it is still
+  cheap.</figcaption>
+</figure>
+
+<figure>
+  <img class="shot" src="img/deversion.svg" alt="gnopm deversion -n printing the migration plan">
+  <figcaption>Migrating an existing repository is one command, and it shows you the plan
+  first.</figcaption>
+</figure>
+
+<p style="color:var(--dim);font-size:14.5px">Every image above is generated from real command
+output by <a href="https://github.com/moul/gnopm/blob/main/scripts/screenshots.sh">a script in
+the repository</a>, so none of them can quietly stop matching what the tool prints.</p>
+
+<h2>Design, in five claims</h2>
+<div class="cols">
+  <div class="card"><h4>Detect, do not ask</h4><p>If gnopm can work something out, it does.
+  A flag is an admission that it could not.</p></div>
+  <div class="card"><h4>A build never mutates the lock</h4><p>Only <code>sync</code> and
+  <code>bump</code> write.</p></div>
+  <div class="card"><h4>The lock is source</h4><p>A change that bumps a version carries the pin
+  that keeps the old one resolvable.</p></div>
+  <div class="card"><h4>Comments are not data</h4><p>Making generated prose load-bearing would
+  break every lock over a wording change.</p></div>
+  <div class="card"><h4>No resolver, ever</h4><p>A gno import path contains its version, so
+  there is no constraint to solve. gno skipped the class of problem that produces SAT solvers.
+  Keep not solving it.</p></div>
+  <div class="card"><h4>Not a wallet</h4><p>It reads chains and generates commands. It never
+  signs and never holds a key.</p></div>
+</div>
+
+<h2>Try it</h2>
+<pre><code>gnopm status      # what resolves, and whether anything is out of date
+gnopm sync        # make the state good
+gnopm bump md     # promote a package, in place; then edit the files
+gnopm ls          # every module and where its source is
+gnopm verify      # prove every pinned version still reproduces (for CI)</code></pre>
+<p>Migrating a repository that still has versioned directories:</p>
+<pre><code>gnopm deversion -n    # the plan
+gnopm deversion       # do it, as git renames</code></pre>
+
+<h2>Using it as a library</h2>
+<p>Everything is in packages so other programs do not have to shell out:
+<a href="https://pkg.go.dev/moul.io/gnopm/pkg/gnomodlock"><code>pkg/gnomodlock</code></a> is the
+<code>gnomod.lock</code> format with no dependency on the CLI, and
+<a href="https://pkg.go.dev/moul.io/gnopm/pkg/gnopm"><code>pkg/gnopm</code></a> is the
+operations. The repository root is the command and a high-level integration test, nothing
+else.</p>
+
+<footer>
+  <p><a href="https://github.com/moul/gnopm">Source</a> ·
+     <a href="https://github.com/moul/gnopm/issues/2">Roadmap</a> ·
+     <a href="https://github.com/moul/gnopm-demo">Worked example</a> ·
+     <a href="https://github.com/moul/gnopm/issues/3">Migrating a repository</a></p>
+  <p>© 2026 <a href="https://manfred.life">Manfred Touron</a>. Apache-2.0 or MIT, at your
+  option.</p>
+</footer>
+
+</div>
+</body>
+</html>

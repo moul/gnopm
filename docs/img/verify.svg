@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="817" height="190" viewBox="0 0 817 190" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13">
+<rect width="817" height="190" rx="10" fill="#11131a"/>
+<rect width="817" height="34" rx="10" fill="#0d1117"/>
+<rect y="24" width="817" height="10" fill="#0d1117"/>
+<circle cx="18" cy="17.0" r="5.5" fill="#ff5f56"/>
+<circle cx="36" cy="17.0" r="5.5" fill="#ffbd2e"/>
+<circle cx="54" cy="17.0" r="5.5" fill="#27c93f"/>
+<text x="408.5" y="21.5" fill="#8b949e" text-anchor="middle" font-size="12">gnopm verify: the failure worth having</text>
+<text x="18" y="56" fill="#7ee787">$</text>
+<text x="34.8" y="56" fill="#d2a8ff">gnopm verify</text>
+<text x="18" y="76" fill="#f0883e" xml:space="preserve">gnopm: 1 version(s) are pinned to a commit that is not on origin/main: gno.land/p/demo/set/v0</text>
+<text x="18" y="96" fill="#8b949e" xml:space="preserve">  A squash or rebase merge discards this branch&#x27;s commits, so those versions would stop</text>
+<text x="18" y="116" fill="#8b949e" xml:space="preserve">  resolving the moment it lands, with nothing left to recover them from.</text>
+<text x="18" y="136" fill="#8b949e" xml:space="preserve">  Fix: bump BEFORE editing a package, so the outgoing version is pinned to a commit that is</text>
+<text x="18" y="156" fill="#8b949e" xml:space="preserve">  already upstream. If nothing imports the stranded version, drop its entry instead.</text>
+</svg>
