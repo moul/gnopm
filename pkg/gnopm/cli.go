@@ -209,6 +209,46 @@ with.`,
 			run:      func(e *Env, fs *flag.FlagSet, args []string) error { return cmdVersion(e) },
 		},
 		{
+			name: "tool", args: "ci [github]",
+			short: "run a gnopm tool: `ci` checks a repository and reports",
+			long: `gnopm tool ci
+
+Runs the checks a repository actually wants in CI and writes a Markdown
+report: that the lock describes the working tree, that every pinned
+version reproduces from history, and that no pin would be discarded by a
+squash merge. Exits non-zero when one fails.
+
+The report goes to stdout and, in GitHub Actions, to the job summary.
+
+  --comment   post it as one sticky pull request comment, updated in
+              place on later runs. Needs GITHUB_TOKEN.
+
+The provider argument is optional; GitHub is detected from the
+environment.`,
+			flags: func(fs *flag.FlagSet) {
+				fs.Bool("comment", false, "post the report as a sticky pull request comment")
+				fs.String("base", "", "ref to compare against (detected by default)")
+			},
+			run: func(e *Env, fs *flag.FlagSet, args []string) error {
+				if len(args) > 0 && args[0] != "ci" && args[0] != "github" {
+					return fmt.Errorf("unknown tool %q. The only tool today is `ci`", args[0])
+				}
+				return CI(e, CIOptions{
+					Comment: flagBool(fs, "comment"),
+					Base:    fs.Lookup("base").Value.String(),
+				})
+			},
+		},
+		{
+			name:  "badges",
+			short: "shields.io badges describing this workspace",
+			long: `Markdown by default, the shields endpoint shape with -json.
+
+Generated rather than hand-written, because a hand-written badge is a
+claim nobody re-checks.`,
+			run: func(e *Env, fs *flag.FlagSet, args []string) error { return Badges(e, e.JSON) },
+		},
+		{
 			name:  "deversion",
 			short: "one-time migration: lift every pkg/vN directory up to pkg",
 			long: `For a repository that still keeps each version in its own directory.
