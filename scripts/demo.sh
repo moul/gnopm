@@ -50,6 +50,7 @@ gnopm() { "$GNOPM" -C "$repo" "$@"; }
 
 repo="$(mkdir -p "$target" && cd "$target" && pwd)"
 rm -rf "${repo:?}/".[!.]* "${repo:?}/"* 2>/dev/null || true
+export GNOPM_BIN="$GNOPM" GNOPM_REPO="$repo"
 
 steps=0
 step() { steps=$((steps+1)); printf '\n\033[1m== %d. %s\033[0m\n' "$steps" "$1"; }
@@ -465,15 +466,49 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+step "the CI a repository needs once it uses gnopm"
+
+# The point of this file is how short it is. Everything it checks lives in the
+# gnopm binary, so a repository adopting the convention does not reimplement
+# any of it, and does not fall behind when the checks improve.
+write .github/workflows/ci.yml <<'YAML'
+name: CI
+on: [push, pull_request]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  gnopm:
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 because gnomod.lock pins versions to commits, and a
+      # shallow clone has none of them.
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.24" }
+      - run: go install moul.io/gnopm@latest
+      - run: gnopm tool ci --comment
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+YAML
+commit "ci: check the workspace with gnopm"
+ok "one short workflow: three checks and a pull request comment"
+
+# ---------------------------------------------------------------------------
 step "the README, and the final state"
 
 write README.md <<'EOF'
 # gnopm-demo
 
+__BADGES__
+
 **Generated. Rewritten from scratch on every run. Do not send pull requests here.**
 
 This repository is the worked example for
-[**gnopm**](https://github.com/moul/gno-contracts/tree/main/tools/gnopm), a
+[**gnopm**](https://github.com/moul/gnopm), a
 package manager for gno workspaces that keeps a package's version in its
 `gnomod.toml` instead of in its directory name.
 
@@ -529,7 +564,31 @@ gnopm ls -pinned      # just the ones with no directory any more
 gnopm verify          # prove every pinned version still reproduces
 gnopm bump set        # one line, then edit the files in place
 ```
+
+## CI
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) is the whole of this
+repository's CI. It installs gnopm and runs `gnopm tool ci --comment`, which
+checks that the lock describes the tree, that every pinned version reproduces
+from history, and that no pin would be discarded by a squash merge, then keeps
+one pull request comment up to date with the result.
+
+Nothing in it is specific to this repository: the checks live in the gnopm
+binary, so adopting them is installing gnopm rather than copying a workflow.
+
+The badges at the top come from `gnopm badges`.
 EOF
+
+# Badges are injected rather than interpolated: an unquoted heredoc would
+# evaluate every backtick in the README body, and the body is full of them.
+python3 - "$repo/README.md" <<'PYEOF'
+import subprocess, sys, os
+badges = subprocess.run([os.environ["GNOPM_BIN"], "-C", os.environ["GNOPM_REPO"], "badges"],
+                        capture_output=True, text=True).stdout.strip()
+p = sys.argv[1]
+s = open(p).read().replace("__BADGES__", badges)
+open(p, "w").write(s)
+PYEOF
 commit "docs: what this repository is"
 
 gnopm status
