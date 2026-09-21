@@ -263,11 +263,16 @@ func cmdEnv(e *Env) error {
 	if upstream == "" {
 		upstream = "(none detected)"
 	}
+	cache := e.cacheDir()
+	if cache == "" {
+		cache = "(off)"
+	}
 	vals := [][2]string{
 		{"GNOPM_ROOT", e.Root},
 		{"GNOPM_LOCK", lock},
 		{"GNOPM_ASSEMBLY", filepath.Join(e.Root, assemblyDir)},
 		{"GNOPM_UPSTREAM", upstream},
+		{"GNOPM_CACHE", cache},
 		{"GNOHOME", gnoHome()},
 	}
 	if e.JSON {

@@ -49,14 +49,19 @@ type progress struct {
 	drawn   bool
 }
 
-// newProgress returns a bar writing to w, silent unless w is a terminal.
+// newProgress returns a bar writing to e.Errw, silent unless that is a
+// terminal a human is watching.
 //
 // Silent when piped, because the report that follows is the record and a
 // half-overwritten bar in a log file is noise. `gnopm publish | sh` pipes
 // stdout and leaves stderr on the terminal, so the common case still gets it.
-func newProgress(w io.Writer, quiet bool, label string) *progress {
-	p := &progress{w: w, label: label, width: terminalWidth()}
-	p.enabled = !quiet && isTerminal(w) && os.Getenv("TERM") != "dumb"
+//
+// Silent under -v too: a bar rewrites one line while the verbose trace scrolls
+// past it, on the same stream, and the two together are less readable than
+// either alone. -v already says what is happening, one line per answer.
+func newProgress(e *Env, label string) *progress {
+	p := &progress{w: e.Errw, label: label, width: terminalWidth()}
+	p.enabled = !e.Quiet && !e.Verbose && isTerminal(e.Errw) && os.Getenv("TERM") != "dumb"
 	return p
 }
 

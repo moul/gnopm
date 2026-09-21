@@ -51,6 +51,14 @@ type Env struct {
 	Errw io.Writer
 	// JSON and Quiet select the output shape.
 	JSON, Quiet bool
+	// Verbose says what is being checked, and where each answer came from.
+	// Everything it writes goes to Errw, so -v never reaches the pipe.
+	Verbose bool
+	// CacheDir is where chain answers persist between runs. "" is a cache that
+	// remembers nothing: -no-cache, GNOPM_CACHE=off, or a machine with no home
+	// directory. Left empty by anything that builds an Env directly, so a
+	// caller has to opt in rather than inherit a user's cache by accident.
+	CacheDir string
 }
 
 // NewEnv locates the workspace containing dir and returns an Env for it.
@@ -64,6 +72,26 @@ func NewEnv(dir string, out, errw io.Writer) (*Env, error) {
 
 func (e *Env) logf(format string, a ...any)   { fmt.Fprintf(e.Errw, format, a...) }
 func (e *Env) printf(format string, a ...any) { fmt.Fprintf(e.Out, format, a...) }
+
+// tracef is what -v prints: the running commentary on what is being checked.
+//
+// Nil-safe on every field, because the things that trace are also the things a
+// caller constructs an Env for by hand, and a verbose flag is never worth a
+// panic.
+func (e *Env) tracef(format string, a ...any) {
+	if e == nil || !e.Verbose || e.Errw == nil {
+		return
+	}
+	fmt.Fprintf(e.Errw, format, a...)
+}
+
+// cacheDir is where this run may persist chain answers, "" for none.
+func (e *Env) cacheDir() string {
+	if e == nil {
+		return ""
+	}
+	return e.CacheDir
+}
 
 // command is one subcommand.
 type command struct {
@@ -211,12 +239,21 @@ The chain is discovered from the package path, so gno.land/... resolves to
 https://gno.land and the rpc and chain id it advertises. Override with -rpc
 and -chainid for a local gnodev.
 
+Asking a chain about two hundred packages is two hundred round trips, so the
+one answer that cannot change is kept between runs. A path live on a chain
+stays live, so ~/.gnopm/live/<chain-id> remembers it and later runs only ask
+about what is missing. Parked and absent are never remembered: a parked
+submission can still be enabled or rejected, and absent is the state of the
+version you are about to publish.
+
   -key      gnokey key name for the emitted commands (default: the namespace
             in the package path, since a namespace is its owner)
   -rpc         RPC endpoint, skipping discovery
   -chainid     chain id, skipping discovery
   -gnokey-cmd  the client to emit, if not "gnokey": a wrapper, a path, or
-               anything taking the same arguments`,
+               anything taking the same arguments
+  -v           say what is checked and whether the chain or the cache answered
+  -no-cache    ask the chain everything, ignoring ~/.gnopm`,
 			flags: func(fs *flag.FlagSet) {
 				fs.String("key", "", "gnokey key name (default: the namespace in the package path)")
 				fs.String("rpc", "", "RPC endpoint (default: discovered from the package path)")
@@ -404,6 +441,8 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, "  -C <dir>   run as if started in <dir>\n")
 	fmt.Fprint(w, "  -q         terse output, module paths only where that makes sense\n")
 	fmt.Fprint(w, "  -json      machine-readable output\n")
+	fmt.Fprint(w, "  -v         say what is being checked, and where each answer came from\n")
+	fmt.Fprint(w, "  -no-cache  ask the chain everything, ignoring ~/.gnopm\n")
 	fmt.Fprint(w, "\n`gnopm help <command>` for detail. Start with `gnopm status`.\n")
 }
 
@@ -466,8 +505,20 @@ func hoistGlobals(args []string) (name string, globals, rest []string, err error
 		if a == "-h" || a == "--help" {
 			return "help", globals, args[i+1:], nil
 		}
-		if a == "-v" || a == "--version" {
+		if a == "--version" {
 			return "version", globals, nil, nil
+		}
+		// -v is the version when it is the whole command line, and the verbose
+		// flag when a command follows it. Nothing is lost: there is nothing to
+		// be verbose about when there is no command, and --version is never
+		// ambiguous either way.
+		if a == "-v" {
+			if i+1 >= len(args) {
+				return "version", globals, nil, nil
+			}
+			globals = append(globals, a)
+			i++
+			continue
 		}
 		opt := strings.TrimLeft(a, "-")
 		if strings.Contains(opt, "=") {
@@ -482,7 +533,7 @@ func hoistGlobals(args []string) (name string, globals, rest []string, err error
 			}
 			globals = append(globals, a, args[i+1])
 			i += 2
-		case "q", "json":
+		case "q", "json", "v", "no-cache":
 			globals = append(globals, a)
 			i++
 		default:
@@ -555,6 +606,8 @@ func Run(args []string, out, errw io.Writer) error {
 	chdir := fs.String("C", ".", "run as if started in this directory")
 	jsonOut := fs.Bool("json", false, "machine-readable output")
 	quiet := fs.Bool("q", false, "terse output")
+	verbose := fs.Bool("v", false, "say what is being checked, and where each answer came from")
+	noCache := fs.Bool("no-cache", false, "ask the chain everything, ignoring the cache")
 	if c.flags != nil {
 		c.flags(fs)
 	}
@@ -572,7 +625,10 @@ func Run(args []string, out, errw io.Writer) error {
 			return err
 		}
 	}
-	e := &Env{Root: root, Out: out, Errw: errw, JSON: *jsonOut, Quiet: *quiet}
+	e := &Env{Root: root, Out: out, Errw: errw, JSON: *jsonOut, Quiet: *quiet, Verbose: *verbose}
+	if !*noCache {
+		e.CacheDir = cacheDir()
+	}
 	return c.run(e, fs, positional)
 }
 

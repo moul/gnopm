@@ -12,15 +12,20 @@ import (
 // whole output discipline rests on knowing which is which.
 func TestProgressIsSilentWhenNobodyIsWatching(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		quiet bool
+		name    string
+		quiet   bool
+		verbose bool
 	}{
-		{"a buffer is not a terminal", false},
-		{"-q means quiet", true},
+		{name: "a buffer is not a terminal"},
+		{name: "-q means quiet", quiet: true},
+		// -v prints one line per answer on this same stream. A bar rewriting
+		// its own line underneath a scrolling trace is less readable than
+		// either alone, so -v takes the bar off.
+		{name: "-v replaces the bar", verbose: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			p := newProgress(&buf, tc.quiet, "reading test-1")
+			p := newProgress(&Env{Errw: &buf, Quiet: tc.quiet, Verbose: tc.verbose}, "reading test-1")
 			p.step(1, 3, "gno.land/p/moul/md/v0")
 			p.step(3, 3, "gno.land/p/moul/md/v2")
 			p.stop()
@@ -36,7 +41,7 @@ func TestProgressIsSilentWhenNobodyIsWatching(t *testing.T) {
 // between the reader and the answer.
 func TestProgressDrawsAndThenErasesItself(t *testing.T) {
 	var buf bytes.Buffer
-	p := newProgress(&buf, false, "reading test-1")
+	p := newProgress(&Env{Errw: &buf}, "reading test-1")
 	p.enabled = true // there is no terminal in a test; this is the only way in
 	p.width = 80
 

@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Has this version been published, and therefore does its number mean anything.
@@ -22,14 +23,24 @@ import (
 
 // Probe answers that question for a set of module paths, over one chain,
 // reading the parked set once and caching every path it looks up.
+//
+// Two caches, and the difference between them is the point. cache is this
+// run's answers, all three states, discarded when the process exits. cached is
+// the disk set of paths this chain has served before, which survives runs
+// because "live" is the one answer that cannot later turn out to be wrong.
 type Probe struct {
+	env       *Env
 	chain     *Chain
 	inert     map[string]bool
 	haveInert bool
+	// cached is the disk set of paths this chain has already served, which
+	// outlives the process because "live" is the one answer that cannot later
+	// turn out to be wrong. Its own lock, so Warm's workers can feed it.
+	cached *liveCache
 
-	// mu guards cache alone. inert and haveInert are written once by NewProbe
-	// and read-only afterwards, which is what lets Warm share them across
-	// workers without a lock on the hot path.
+	// mu guards cache alone. inert, haveInert and cached are written once by
+	// NewProbe and safe for concurrent reads afterwards, which is what lets
+	// Warm share them across workers without a lock on the hot path.
 	mu    sync.Mutex
 	cache map[string]PackageState
 }
@@ -45,17 +56,33 @@ const probeConcurrency = 8
 
 // NewProbe resolves the chain a module path names and prepares to query it.
 // rpc and chainID skip discovery, for a local gnodev.
-func NewProbe(module, rpc, chainID string) (*Probe, error) {
-	c, err := DiscoverChain(module, rpc, chainID)
+func NewProbe(e *Env, module, rpc, chainID string) (*Probe, error) {
+	c, err := DiscoverChain(e, module, rpc, chainID)
 	if err != nil {
 		return nil, err
 	}
+	cached := openLiveCache(e.cacheDir(), c.ID)
+	if f := cached.where(); f != "" {
+		start, _, _ := cached.stats()
+		e.tracef("cache    %s, %d path(s) known live\n", f, start)
+	} else {
+		e.tracef("cache    off: nothing about %s is kept between runs\n", c.ID)
+	}
+	start := time.Now()
 	inert, have, err := inertSet(c)
 	if err != nil {
 		return nil, err
 	}
-	return &Probe{chain: c, inert: inert, haveInert: have, cache: map[string]PackageState{}}, nil
+	e.tracef("chain    vm/qinertpaths: %d path(s) parked, in %s\n", len(inert), took(start))
+	return &Probe{
+		env: e, chain: c, inert: inert, haveInert: have,
+		cache: map[string]PackageState{}, cached: cached,
+	}, nil
 }
+
+// Cache is the disk set backing this probe, so a command can report what it
+// saved. Never nil.
+func (p *Probe) Cache() *liveCache { return p.cached }
 
 // Chain is what the probe resolved, so a caller can name it in its output.
 // A message that says "absent" without saying absent from where is a message
@@ -78,7 +105,7 @@ func (p *Probe) State(module string) (PackageState, error) {
 	if ok {
 		return s, nil
 	}
-	s, err := stateOf(p.chain, module, p.inert)
+	s, err := p.resolve(module)
 	if err != nil {
 		return "", err
 	}
@@ -86,6 +113,51 @@ func (p *Probe) State(module string) (PackageState, error) {
 	p.cache[module] = s
 	p.mu.Unlock()
 	return s, nil
+}
+
+// resolve answers one path from wherever the answer is cheapest, and says
+// where under -v. Safe to call from several goroutines; it does not touch
+// p.cache, which is the caller's business.
+func (p *Probe) resolve(module string) (PackageState, error) {
+	if s, where, ok := p.answerLocally(module); ok {
+		p.trace(s, module, where)
+		return s, nil
+	}
+	start := time.Now()
+	s, err := stateOf(p.chain, module, p.inert, p.cached)
+	if err != nil {
+		return "", err
+	}
+	p.trace(s, module, "chain, "+took(start))
+	return s, nil
+}
+
+// answerLocally resolves a path without touching the network: from the parked
+// set read once at startup, or from the disk set of paths this chain has
+// already served.
+//
+// Splitting this out of stateOf is what lets Warm size its batch by the work
+// that genuinely needs a round trip, so the progress bar counts real queries
+// and the workers are not dispatched to do a map lookup.
+func (p *Probe) answerLocally(module string) (PackageState, string, bool) {
+	if p.inert[module] {
+		return StateParked, "parked set", true
+	}
+	if p.cached.has(module) {
+		return StateLive, "cache", true
+	}
+	return "", "", false
+}
+
+// trace is the -v line for one answer. It takes p.mu because Warm calls it
+// from several goroutines and two half-written lines are worse than none.
+func (p *Probe) trace(s PackageState, module, where string) {
+	if p.env == nil || !p.env.Verbose {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.env.tracef("  %-6s %s  (%s)\n", s, module, where)
 }
 
 // Warm resolves many module paths at once and fills the cache, so that the
@@ -122,6 +194,26 @@ func (p *Probe) Warm(modules []string, step func(done, total int, module string)
 	// rather than in whichever order the lock happened to hold.
 	sort.Strings(todo)
 
+	// Everything the parked set or the disk cache can answer is answered here,
+	// before a single worker starts. On a warm cache that is nearly all of it,
+	// and what remains is the batch worth parallelizing.
+	cold := todo[:0:0]
+	for _, m := range todo {
+		s, where, ok := p.answerLocally(m)
+		if !ok {
+			cold = append(cold, m)
+			continue
+		}
+		p.trace(s, m, where)
+		p.mu.Lock()
+		p.cache[m] = s
+		p.mu.Unlock()
+	}
+	if len(cold) == 0 {
+		return nil
+	}
+	todo = cold
+
 	workers := probeConcurrency
 	if len(todo) < workers {
 		workers = len(todo)
@@ -144,7 +236,8 @@ func (p *Probe) Warm(modules []string, step func(done, total int, module string)
 				if stop {
 					continue // drain, so the producer is never left blocked
 				}
-				s, err := stateOf(p.chain, m, p.inert)
+				start := time.Now()
+				s, err := stateOf(p.chain, m, p.inert, p.cached)
 				if err != nil {
 					errMu.Lock()
 					if firstErr == nil {
@@ -156,6 +249,7 @@ func (p *Probe) Warm(modules []string, step func(done, total int, module string)
 				p.mu.Lock()
 				p.cache[m] = s
 				p.mu.Unlock()
+				p.trace(s, m, "chain, "+took(start))
 				if step != nil {
 					errMu.Lock()
 					done++
@@ -210,7 +304,13 @@ func inertSet(c *Chain) (map[string]bool, bool, error) {
 	return set, true, nil
 }
 
-func stateOf(c *Chain, path string, inert map[string]bool) (PackageState, error) {
+// stateOf asks the chain, and feeds the disk cache from here rather than from
+// its callers so that no path into it can forget to write back what it just
+// learned. cached may be nil, which is a probe that asks the chain every time.
+//
+// The inert check stays as a guard for a caller that has not been through
+// answerLocally; asking vm/qfile about a parked path would answer "absent".
+func stateOf(c *Chain, path string, inert map[string]bool, cached *liveCache) (PackageState, error) {
 	if inert[path] {
 		return StateParked, nil
 	}
@@ -220,6 +320,7 @@ func stateOf(c *Chain, path string, inert map[string]bool) (PackageState, error)
 		}
 		return "", fmt.Errorf("asking %s about %s: %w", c.RPC, path, err)
 	}
+	cached.learn(path)
 	return StateLive, nil
 }
 

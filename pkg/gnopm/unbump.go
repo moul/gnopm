@@ -151,7 +151,7 @@ func unbumpTarget(e *Env, lock *Lock, pkg Package, base string, cur int, opts Un
 		e.logf("-force: falling back to v%d, the previous version in %s, without asking a chain\n", prev, lockFile)
 		return prev, "", nil
 	}
-	probe, err := NewProbe(pkg.Module, opts.RPC, opts.ChainID)
+	probe, err := NewProbe(e, pkg.Module, opts.RPC, opts.ChainID)
 	if err != nil {
 		return 0, "", fmt.Errorf("%w\n  unbump reads the chain to find the lowest version nothing has taken.\n"+
 			"  -force falls back to the previous version in "+lockFile, err)

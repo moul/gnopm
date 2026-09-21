@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -78,12 +79,14 @@ func hostForPath(module string) (string, error) {
 	return "https://" + domain, nil
 }
 
-// DiscoverChain resolves the chain serving a module path by reading the
-// gnoweb instance the path names. Results are cached per host for the process.
+// DiscoverChain resolves the chain serving a module path by reading the gnoweb
+// instance the path names. Results are cached per host for the process, and
+// under e's cache directory for a day: discovery is one HTTPS round trip every
+// chain-reading command otherwise pays to be told the same two strings.
 //
 // An explicit rpc/chainID overrides discovery entirely, for a local gnodev or
 // a chain that does not front itself with gnoweb.
-func DiscoverChain(module, rpc, chainID string) (*Chain, error) {
+func DiscoverChain(e *Env, module, rpc, chainID string) (*Chain, error) {
 	if rpc != "" && chainID != "" {
 		return &Chain{Host: "", RPC: rpc, ID: chainID}, nil
 	}
@@ -99,6 +102,17 @@ func DiscoverChain(module, rpc, chainID string) (*Chain, error) {
 		return withOverrides(cached, rpc, chainID), nil
 	}
 
+	dir := e.cacheDir()
+	if r, id, ok := readDiscovered(dir, host); ok {
+		e.tracef("chain    %s is %s (%s), remembered in %s\n", host, id, r, discoveryFile(dir, host))
+		c := &Chain{Host: host, RPC: r, ID: id}
+		chainCacheMu.Lock()
+		chainCache[host] = c
+		chainCacheMu.Unlock()
+		return withOverrides(c, rpc, chainID), nil
+	}
+
+	start := time.Now()
 	resp, err := httpClient.Get(host)
 	if err != nil {
 		return nil, fmt.Errorf("discovering the chain at %s: %w "+
@@ -121,6 +135,8 @@ func DiscoverChain(module, rpc, chainID string) (*Chain, error) {
 		return nil, fmt.Errorf("%s does not advertise gnoconnect:rpc and gnoconnect:chainid "+
 			"(pass -rpc and -chainid)", host)
 	}
+	e.tracef("chain    GET %s said %s (%s) in %s\n", host, c.ID, c.RPC, took(start))
+	writeDiscovered(dir, host, c.RPC, c.ID)
 
 	chainCacheMu.Lock()
 	chainCache[host] = c
@@ -137,6 +153,16 @@ func withOverrides(c *Chain, rpc, chainID string) *Chain {
 		out.ID = chainID
 	}
 	return &out
+}
+
+// took renders a duration the way a progress line wants it: short, fixed in
+// shape, and never in nanoseconds.
+func took(start time.Time) string {
+	d := time.Since(start)
+	if d < time.Second {
+		return strconv.FormatInt(d.Milliseconds(), 10) + "ms"
+	}
+	return strconv.FormatFloat(d.Seconds(), 'f', 1, 64) + "s"
 }
 
 // rpcResponse is the slice of the JSON-RPC envelope this tool reads.

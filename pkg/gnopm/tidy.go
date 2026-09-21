@@ -251,7 +251,7 @@ func tidyChain(e *Env, opts TidyOptions) error {
 		fmt.Fprintf(w, "chain        nothing in the working tree to check\n")
 		return nil
 	}
-	probe, err := NewProbe(tree[0].Module, opts.RPC, opts.ChainID)
+	probe, err := NewProbe(e, tree[0].Module, opts.RPC, opts.ChainID)
 	if err != nil {
 		return fmt.Errorf("%w\n  `gnopm tidy -offline` skips the chain pass", err)
 	}
@@ -266,7 +266,7 @@ func tidyChain(e *Env, opts TidyOptions) error {
 	for _, en := range tree {
 		want = append(want, en.Module)
 	}
-	bar := newProgress(e.Errw, e.Quiet, "reading "+probe.Chain().ID)
+	bar := newProgress(e, "reading "+probe.Chain().ID)
 	err = probe.Warm(want, bar.step)
 	bar.stop()
 	if err != nil {
