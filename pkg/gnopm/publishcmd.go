@@ -16,33 +16,6 @@ type plan struct {
 	missing []string // imports not live on the chain and not in this plan
 }
 
-// inertSet reads every parked path once. A chain without the inert policy has
-// no such endpoint, which is not an error: it means nothing can be parked, so
-// the set is empty and every absent package is genuinely absent.
-func inertSet(c *Chain) (map[string]bool, bool) {
-	raw, err := c.ABCIQuery("vm/qinertpaths", "")
-	if err != nil {
-		return nil, false
-	}
-	set := map[string]bool{}
-	for _, l := range strings.Split(raw, "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			set[l] = true
-		}
-	}
-	return set, true
-}
-
-func stateOf(c *Chain, path string, inert map[string]bool) PackageState {
-	if inert[path] {
-		return StateParked
-	}
-	if _, err := c.ABCIQuery("vm/qfile", path); err != nil {
-		return StateAbsent
-	}
-	return StateLive
-}
-
 func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	lock, err := readLock(e.Root)
 	if err != nil {
@@ -80,10 +53,11 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 		return fmt.Errorf("no package in the working tree matches %q", pattern)
 	}
 
-	chain, err := DiscoverChain(pkgs[0].Module, rpc, chainID)
+	probe, err := NewProbe(pkgs[0].Module, rpc, chainID)
 	if err != nil {
 		return err
 	}
+	chain := probe.Chain()
 	domain := pkgs[0].Module
 	if i := strings.IndexByte(domain, '/'); i >= 0 {
 		domain = domain[:i]
@@ -117,34 +91,32 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	}
 	ordered := TopoOrder(pkgs, deps)
 
-	inert, haveInert := inertSet(chain)
+	haveInert := probe.CanPark()
 	inPlan := map[string]bool{}
 	for _, p := range ordered {
 		inPlan[p.Module] = true
 	}
 
 	var plans []plan
-	stateCache := map[string]PackageState{}
-	lookup := func(path string) PackageState {
-		if s, ok := stateCache[path]; ok {
-			return s
-		}
-		s := stateOf(chain, path, inert)
-		stateCache[path] = s
-		return s
-	}
-
 	for _, p := range ordered {
 		files, n, err := Payload(e.Root + "/" + p.Dir)
 		if err != nil {
 			return err
 		}
-		pl := plan{pkg: p, state: lookup(p.Module), bytes: n, files: files}
+		state, err := probe.State(p.Module)
+		if err != nil {
+			return err
+		}
+		pl := plan{pkg: p, state: state, bytes: n, files: files}
 		for _, d := range deps[p.Module] {
 			if inPlan[d] {
 				continue // published earlier in this same plan
 			}
-			if lookup(d) != StateLive {
+			ds, err := probe.State(d)
+			if err != nil {
+				return err
+			}
+			if ds != StateLive {
 				pl.missing = append(pl.missing, d)
 			}
 		}

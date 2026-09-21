@@ -132,8 +132,29 @@ the repository</a>, so none of them can quietly stop matching what the tool prin
 <pre><code>gnopm status      # what resolves, and whether anything is out of date
 gnopm sync        # make the state good
 gnopm bump md     # promote a package, in place; then edit the files
+gnopm unbump md   # take a number back, while nothing has published it
 gnopm ls          # every module and where its source is
-gnopm verify      # prove every pinned version still reproduces (for CI)</code></pre>
+gnopm verify      # prove every pinned version still reproduces (for CI)
+gnopm tidy        # make the whole workspace right, chain included</code></pre>
+
+<h2>A version number is a tag, not a counter</h2>
+<p>A number only means something once the version is published: until then it names no bytes,
+resolves for no importer, and derives no address. So the rule is <strong>bump when the last
+version shipped, and edit in place when it did not.</strong></p>
+<p>Getting it wrong is the default behaviour of a stack of pull requests. The first bumps
+<code>v0</code> to <code>v1</code> and lands. The second is written against it, sees
+<code>v1</code> taken, and goes to <code>v2</code>. Both merge before either is published, and
+the package reaches a chain as <code>v2</code> with <code>v1</code> existing nowhere. Often the
+lock cannot even show it: <code>bump</code> will not pin a version living on no commit the
+default branch has, so the number is skipped rather than recorded.</p>
+<p><code>bump</code> stays offline and literal, because a tool that phones home before doing
+what it was told is a tool you cannot use in CI. Asking it to decide is opt-in:</p>
+<pre><code>gnopm bump md -if-published   # bumps only if v0 is live or parked on the chain
+gnopm unbump md               # the inverse: lower to the lowest number nothing has taken
+gnopm tidy                    # find every number spent on nothing</code></pre>
+<p><code>unbump</code> reads its target off the chain rather than out of the lock, which is what
+makes it safe rather than merely guarded: the target is by construction a number the chain has
+never seen, so it cannot withdraw a published version and cannot redefine one either.</p>
 <p>Migrating a repository that still has versioned directories:</p>
 <pre><code>gnopm deversion -n    # the plan
 gnopm deversion       # do it, as git renames</code></pre>

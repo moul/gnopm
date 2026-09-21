@@ -47,8 +47,10 @@ them and rebuilt into a gitignored `.gnopm/` on demand, so anything importing
 gnopm status      # what resolves, and whether anything is out of date
 gnopm sync        # make the state good
 gnopm bump md     # promote a package, in place; then edit the files
+gnopm unbump md   # take a number back, while nothing has published it
 gnopm ls          # every module and where its source is
 gnopm verify      # prove every pinned version still reproduces (for CI)
+gnopm tidy        # make the whole workspace right, chain included
 gnopm publish     # what is missing on chain, as gnokey commands you can read
 ```
 
@@ -64,6 +66,61 @@ standing in. Data goes to stdout and nothing else does, so it pipes:
 gnopm ls -q | xargs -n1 gno lint
 gnopm status -json | jq -e .ok
 ```
+
+## A version number is a tag, not a counter
+
+A number only means something once the version is published: until then it
+names no bytes, resolves for no importer, and derives no address. So the rule
+is **bump when the last version shipped, and edit in place when it did not.**
+
+Getting it wrong is the default behaviour of a stack of pull requests. The
+first bumps `v0` to `v1` and lands. The second is written against it, sees `v1`
+taken, and goes to `v2`. Both merge before either is published, and the package
+reaches a chain as `v2` with `v1` existing nowhere. Often the lock cannot even
+show it: `bump` will not pin a version living on no commit the default branch
+has, so the number is skipped rather than recorded and the lock jumps `v0` to
+`v2` with nothing in between.
+
+`bump` itself stays offline and literal, because a tool that phones home before
+doing what it was told is a tool you cannot use in CI. Asking it to decide is
+opt-in, and costs one chain read:
+
+```sh
+gnopm bump md -if-published    # bumps only if v0 is live or parked; otherwise says so and exits 0
+gnopm unbump md                # the inverse: lower to the lowest number nothing has taken
+```
+
+`unbump` reads its target off the chain rather than out of the lock, which is
+what makes it safe rather than merely guarded: the target is by construction a
+number the chain has never seen, so it cannot withdraw a published version and
+cannot redefine one either.
+
+`tidy` is the command that finds all of this for you. Where `sync` is cheap,
+silent and idempotent, the one a Makefile prerequisite calls, `tidy` is the one
+you run when you want the workspace right and it may cost git walks and chain
+reads:
+
+```
+$ gnopm tidy -n
+lock         up to date
+pins         nothing to drop
+gnopm: ok, 228 modules locked (193 in tree, 35 pinned to history)
+chain        gnoland-1 (https://rpc.gno.land)
+             153 live, 0 parked, 40 absent
+
+4 version number(s) spent on nothing:
+  gno.land/r/moul/x/daily/todos/v2
+    v1 is free: nothing published has ever taken that number.
+    gnopm unbump r/moul/x/daily/todos lowers it to v1.
+```
+
+Four passes: `sync`, then drop any pin nothing imports whose commit never
+reached the default branch, then `verify`'s expensive proof over what is left,
+then the chain. It writes only what is safe to write unasked; lowering a
+version changes a package's identity, so that stays a deliberate `unbump`.
+`-offline` skips the chain pass, `-n` changes nothing.
+
+## Migrating
 
 Migrating a repository off versioned directories is one command, and it shows
 the plan first:
@@ -126,7 +183,7 @@ shallow clone has none of the pinned commits.
 | import | what |
 |---|---|
 | [`moul.io/gnopm/pkg/gnomodlock`](./pkg/gnomodlock) | the `gnomod.lock` format, with no dependency on the CLI |
-| [`moul.io/gnopm/pkg/gnopm`](./pkg/gnopm) | the operations: `Sync`, `Bump`, `Verify`, `Tidy`, `Deversion` |
+| [`moul.io/gnopm/pkg/gnopm`](./pkg/gnopm) | the operations: `Sync`, `Bump`, `Unbump`, `Verify`, `Tidy`, `Deversion` |
 
 No third-party dependencies. The root is the command and a high-level
 integration test, nothing else.

@@ -384,7 +384,7 @@ func TestBumpRefusesUncommittedSource(t *testing.T) {
 	addPkg(t, root, "p/moul/a/v0", "gno.land/p/moul/a/v0", "package a\n")
 	commit(t, root, "seed")
 	write(t, filepath.Join(root, "p/moul/a/v0/a.gno"), "package a // uncommitted\n")
-	err := Bump(testEnv(root, &bytes.Buffer{}), "p/moul/a/v0", 0, false)
+	err := Bump(testEnv(root, &bytes.Buffer{}), "p/moul/a/v0", BumpOptions{})
 	if err == nil {
 		t.Fatal("bump ran on a dirty tree")
 	}
@@ -637,7 +637,7 @@ func TestPinSurvivesASquashMerge(t *testing.T) {
 		t.Fatal("test setup: the branch did not advance")
 	}
 
-	if err := Bump(testEnv(root, &bytes.Buffer{}), "p/moul/md/v0", 0, false); err != nil {
+	if err := Bump(testEnv(root, &bytes.Buffer{}), "p/moul/md/v0", BumpOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	l := mustLock(t, root)
@@ -668,7 +668,7 @@ func TestPinFallsBackAndSaysSo(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := Bump(testEnv(root, &out), "p/moul/new/v0", 0, false); err != nil {
+	if err := Bump(testEnv(root, &out), "p/moul/new/v0", BumpOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	l := mustLock(t, root)
@@ -922,7 +922,7 @@ func TestVerifyUpstreamCatchesAStrandedPin(t *testing.T) {
 	gitCmd(t, root, "checkout", "-q", "-b", "feature")
 	write(t, filepath.Join(root, "p/moul/md/md.gno"), "package md\n\nfunc A() {}\nfunc B() {}\n")
 	commit(t, root, "edit md on the branch")
-	if err := Bump(testEnv(root, &bytes.Buffer{}), "md", 0, false); err != nil {
+	if err := Bump(testEnv(root, &bytes.Buffer{}), "md", BumpOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	commit(t, root, "bump")
@@ -955,7 +955,7 @@ func TestVerifyUpstreamPassesForTheDocumentedFlow(t *testing.T) {
 	gitCmd(t, root, "branch", "-f", "upstream", "HEAD")
 
 	gitCmd(t, root, "checkout", "-q", "-b", "feature")
-	if err := Bump(testEnv(root, &bytes.Buffer{}), "md", 0, false); err != nil {
+	if err := Bump(testEnv(root, &bytes.Buffer{}), "md", BumpOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	write(t, filepath.Join(root, "p/moul/md/md.gno"), "package md\n\nfunc A() {}\nfunc B() {}\n")

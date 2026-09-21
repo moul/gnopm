@@ -59,7 +59,7 @@ func TestTidyNeedsBothConditions(t *testing.T) {
 
 	// A bump that lands entirely on this branch: v0 never shipped.
 	gitCmd(t, root, "checkout", "-q", "-b", "feature")
-	if err := Bump(testEnv(root, &bytes.Buffer{}), "md", 0, false); err != nil {
+	if err := Bump(testEnv(root, &bytes.Buffer{}), "md", BumpOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	commit(t, root, "bump")
@@ -67,22 +67,22 @@ func TestTidyNeedsBothConditions(t *testing.T) {
 	// v0's pin IS upstream here (bump pinned it to origin/main), so tidy must
 	// keep it: it shipped.
 	var out bytes.Buffer
-	if err := Tidy(testEnv(root, &out), false); err != nil {
+	if err := Tidy(testEnv(root, &out), TidyOptions{Offline: true}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "nothing to tidy") {
+	if !strings.Contains(out.String(), "nothing to drop") {
 		t.Fatalf("tidy dropped a version that shipped: %s", out.String())
 	}
 
 	// Now the unshipped case: edit then bump, so the pin is branch-only.
 	write(t, filepath.Join(root, "p/moul/md/md.gno"), "package md // v1 body\n")
 	commit(t, root, "edit")
-	if err := Bump(testEnv(root, &bytes.Buffer{}), "md", 0, false); err != nil {
+	if err := Bump(testEnv(root, &bytes.Buffer{}), "md", BumpOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	commit(t, root, "bump again")
 	out.Reset()
-	if err := Tidy(testEnv(root, &out), false); err != nil {
+	if err := Tidy(testEnv(root, &out), TidyOptions{Offline: true}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "gno.land/p/moul/md/v1") {
@@ -107,16 +107,16 @@ func TestTidyKeepsAnImportedVersion(t *testing.T) {
 	gitCmd(t, root, "checkout", "-q", "-b", "feature")
 	write(t, filepath.Join(root, "p/moul/md/md.gno"), "package md // edited\n")
 	commit(t, root, "edit md")
-	if err := Bump(testEnv(root, &bytes.Buffer{}), "md", 0, false); err != nil {
+	if err := Bump(testEnv(root, &bytes.Buffer{}), "md", BumpOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	commit(t, root, "bump md")
 
 	var out bytes.Buffer
-	if err := Tidy(testEnv(root, &out), false); err != nil {
+	if err := Tidy(testEnv(root, &out), TidyOptions{Offline: true}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "nothing to tidy") {
+	if !strings.Contains(out.String(), "nothing to drop") {
 		t.Fatalf("tidy dropped a version that p/moul/user imports: %s", out.String())
 	}
 }

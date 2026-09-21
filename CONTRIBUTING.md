@@ -20,7 +20,7 @@ compiles.
 
 ```
 main.go                 entry point only, no logic
-pkg/gnopm/              the operations: Sync, Bump, Verify, Tidy, Deversion, CI
+pkg/gnopm/              the operations: Sync, Bump, Unbump, Verify, Tidy, Deversion, CI
 pkg/gnomodlock/         the gnomod.lock format, independent of the CLI
 scripts/demo.sh         the integration test, which is also the demo
 scripts/screenshots.sh  regenerates docs/img/ from real output
@@ -38,7 +38,7 @@ CLI, a repository layout, or anything outside the standard library.
 The reference documentation is [`README.md`](./README.md); direction and
 roadmap are in issue #2. Neither is repeated here.
 
-## Six claims the code keeps making
+## Seven claims the code keeps making
 
 Break one deliberately, with a reason, or not at all.
 
@@ -54,6 +54,10 @@ Break one deliberately, with a reason, or not at all.
    no constraint to solve. Resist anything that reintroduces one.
 6. **Not a wallet.** gnopm reads chains and may *generate* a `gnokey` command.
    It never signs, holds a key, or broadcasts.
+7. **A chain answer is not a chain failure.** `ABCIQuery` returns `*ABCIError`
+   when a node replied and said no, and a plain error when nothing replied.
+   Every guard here is built on "absent means it was published to nobody", so
+   collapsing the two lets an unreachable node open all of them.
 
 ## Style
 

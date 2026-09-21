@@ -2,6 +2,7 @@ package gnopm
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,7 +24,11 @@ import (
 //  3. The package's own lock entry becomes { dir }: it is the tree copy now.
 //
 // Then you edit the files in place and git diffs them properly.
-func Bump(e *Env, target string, to int, force bool) error {
+//
+// Bump is offline and literal by default: it does what it was asked, so it
+// stays usable in CI, on a plane, and against a chain that is down. Asking it
+// to decide for itself is opt-in, and costs a chain read: see IfPublished.
+func Bump(e *Env, target string, opts BumpOptions) error {
 	root, w := e.Root, e.Errw
 	pkgs, err := scanPackages(root)
 	if err != nil {
@@ -38,13 +43,27 @@ func Bump(e *Env, target string, to int, force bool) error {
 		return fmt.Errorf("module %q has no trailing /vN, nothing to bump", pkg.Module)
 	}
 	next := cur + 1
-	if to != 0 {
-		if to <= cur {
-			return fmt.Errorf("module %q is already at v%d, cannot bump to v%d", pkg.Module, cur, to)
+	if opts.To != 0 {
+		if opts.To <= cur {
+			return fmt.Errorf("module %q is already at v%d, cannot bump to v%d", pkg.Module, cur, opts.To)
 		}
-		next = to
+		next = opts.To
 	}
 	nextModule := fmt.Sprintf("%s/v%d", base, next)
+
+	// The version number is a tag on something published, not a count of
+	// edits. Asked to check, look, and decline the bump when there is nothing
+	// to leave behind: an absent version was promised to nobody, so the change
+	// belongs inside it.
+	if opts.IfPublished {
+		bump, err := worthBumping(w, pkg, opts)
+		if err != nil {
+			return err
+		}
+		if !bump {
+			return nil
+		}
+	}
 
 	// A dirty tree makes the recorded commit a lie: the lock would say
 	// "v0 is at HEAD:p/moul/md" while the version that was actually at HEAD
@@ -55,7 +74,7 @@ func Bump(e *Env, target string, to int, force bool) error {
 	if err != nil {
 		return err
 	}
-	if len(dirty) > 0 && !force {
+	if len(dirty) > 0 && !opts.Force {
 		return fmt.Errorf("%s has uncommitted changes (%d, e.g. %s)\n"+
 			"  bump pins %s at HEAD, so HEAD has to hold the version you are leaving behind.\n"+
 			"  commit first, or pass -force if you are certain HEAD is right", pkg.Dir, len(dirty), strings.TrimSpace(dirty[0]), pkg.Module)
@@ -181,4 +200,54 @@ func ensureIgnored(root string) error {
 		}
 	}
 	return fmt.Errorf(".gitignore does not ignore /%s/, add it before running install", assemblyDir)
+}
+
+// BumpOptions is what bump was asked to do.
+//
+// A struct rather than a growing list of positional arguments: the list has
+// grown twice already, and Bump(e, "md", 0, false, true, "", "") tells a
+// reader nothing about which false is which.
+type BumpOptions struct {
+	// To bumps to this major version instead of the next one.
+	To int
+	// Force allows uncommitted changes in the package.
+	Force bool
+	// IfPublished makes the bump conditional on the chain: bump only when the
+	// outgoing version is live or parked there, because only then is there
+	// something a new number has to avoid disturbing.
+	IfPublished bool
+	// RPC and ChainID skip chain discovery, for a local gnodev.
+	RPC, ChainID string
+}
+
+// worthBumping asks the chain whether the outgoing version was ever published,
+// and reports whether the bump should go ahead.
+//
+// Declining is not a failure and does not exit non-zero: "nothing to do" is
+// the answer, and the command that wants it is meant to sit in a script ahead
+// of an edit. Exiting non-zero would make every caller write `|| true` and
+// lose the real errors with it.
+func worthBumping(w io.Writer, pkg Package, opts BumpOptions) (bool, error) {
+	probe, err := NewProbe(pkg.Module, opts.RPC, opts.ChainID)
+	if err != nil {
+		return false, err
+	}
+	state, err := probe.State(pkg.Module)
+	if err != nil {
+		return false, err
+	}
+	if state != StateAbsent {
+		fmt.Fprintf(w, "%s is %s on %s: it cannot be edited, so the change needs a new version.\n",
+			pkg.Module, state, probe.Chain().ID)
+		return true, nil
+	}
+	_, cur, _ := splitVersion(pkg.Module)
+	fmt.Fprintf(w, "not bumping %s: %s is absent from %s.\n", pkg.Dir, pkg.Module, probe.Chain().ID)
+	fmt.Fprintf(w, "  A version number is a tag on something published, and this one was published\n")
+	fmt.Fprintf(w, "  to nobody, so v%d is still the version to edit. Edit %s in place.\n", cur, pkg.Dir)
+	if !probe.CanPark() {
+		fmt.Fprintf(w, "  This chain cannot park a submission, so absent really is absent.\n")
+	}
+	fmt.Fprintf(w, "  `gnopm bump %s` without -if-published bumps anyway.\n", pkg.Dir)
+	return false, nil
 }
