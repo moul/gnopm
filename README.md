@@ -229,6 +229,6 @@ None. The lock parser and the `h1:` hash are standard library.
 
 ## License
 
-© 2026 [Manfred Touron](https://manfred.life)
+© 2026 [Manfred Touron](https://moul.io)
 
-Licensed under the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0) ([`LICENSE-APACHE`](LICENSE-APACHE)) or the [MIT license](https://opensource.org/licenses/MIT) ([`LICENSE-MIT`](LICENSE-MIT)), at your option.
+Licensed under the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0) or the [MIT license](https://opensource.org/licenses/MIT), at your option. See [`COPYRIGHT`](./COPYRIGHT).
