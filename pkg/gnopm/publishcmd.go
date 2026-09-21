@@ -1,0 +1,242 @@
+package gnopm
+
+import (
+	"flag"
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+// plan is one package's publish plan.
+type plan struct {
+	pkg     Package
+	state   PackageState
+	bytes   int
+	files   []UploadFile
+	missing []string // imports not live on the chain and not in this plan
+}
+
+// inertSet reads every parked path once. A chain without the inert policy has
+// no such endpoint, which is not an error: it means nothing can be parked, so
+// the set is empty and every absent package is genuinely absent.
+func inertSet(c *Chain) (map[string]bool, bool) {
+	raw, err := c.ABCIQuery("vm/qinertpaths", "")
+	if err != nil {
+		return nil, false
+	}
+	set := map[string]bool{}
+	for _, l := range strings.Split(raw, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			set[l] = true
+		}
+	}
+	return set, true
+}
+
+func stateOf(c *Chain, path string, inert map[string]bool) PackageState {
+	if inert[path] {
+		return StateParked
+	}
+	if _, err := c.ABCIQuery("vm/qfile", path); err != nil {
+		return StateAbsent
+	}
+	return StateLive
+}
+
+func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
+	lock, err := readLock(e.Root)
+	if err != nil {
+		return err
+	}
+	pattern := ""
+	if len(args) > 0 {
+		pattern = args[0]
+	}
+	rpc, chainID := flagString(fs, "rpc"), flagString(fs, "chainid")
+	key := flagString(fs, "key")
+	// The client is a command, not necessarily the binary called "gnokey": a
+	// wrapper that adds a keybase, a remote signer, or an agent session key is
+	// a normal thing to have, and hard-coding the name would force everyone
+	// using one to post-process the script.
+	gnokeyCmd := flagString(fs, "gnokey-cmd")
+	if gnokeyCmd == "" {
+		gnokeyCmd = "gnokey"
+	}
+
+	// Only packages whose source is in the working tree can be published: a
+	// version pinned to history exists to keep imports resolving, and
+	// re-uploading one would publish code nobody is looking at.
+	var pkgs []Package
+	for _, m := range sortedModules(lock) {
+		if !m.Source.InTree() {
+			continue
+		}
+		if pattern != "" && !strings.Contains(m.Module, pattern) && !strings.Contains(m.Source.Dir, pattern) {
+			continue
+		}
+		pkgs = append(pkgs, Package{Dir: m.Source.Dir, Module: m.Module})
+	}
+	if len(pkgs) == 0 {
+		return fmt.Errorf("no package in the working tree matches %q", pattern)
+	}
+
+	chain, err := DiscoverChain(pkgs[0].Module, rpc, chainID)
+	if err != nil {
+		return err
+	}
+	domain := pkgs[0].Module
+	if i := strings.IndexByte(domain, '/'); i >= 0 {
+		domain = domain[:i]
+	}
+
+	// Detect, do not ask: a gno package path carries the namespace that owns
+	// it, and a namespace is a user, so `gno.land/r/alice/home` is alice's to
+	// publish and her key is overwhelmingly likely to be named `alice`. Guess
+	// it, print the guess, and let -key override. Requiring the flag would be
+	// friction paid on every invocation to restate what the path already says.
+	if key == "" {
+		key = namespaceOf(pkgs[0].Module)
+		if key == "" {
+			return fmt.Errorf("cannot tell which key to name from %q: pass -key", pkgs[0].Module)
+		}
+	}
+
+	deps := map[string][]string{}
+	for _, p := range pkgs {
+		imps, err := Imports(e.Root+"/"+p.Dir, domain)
+		if err != nil {
+			return err
+		}
+		out := imps[:0:0]
+		for _, im := range imps {
+			if im != p.Module {
+				out = append(out, im)
+			}
+		}
+		deps[p.Module] = out
+	}
+	ordered := TopoOrder(pkgs, deps)
+
+	inert, haveInert := inertSet(chain)
+	inPlan := map[string]bool{}
+	for _, p := range ordered {
+		inPlan[p.Module] = true
+	}
+
+	var plans []plan
+	stateCache := map[string]PackageState{}
+	lookup := func(path string) PackageState {
+		if s, ok := stateCache[path]; ok {
+			return s
+		}
+		s := stateOf(chain, path, inert)
+		stateCache[path] = s
+		return s
+	}
+
+	for _, p := range ordered {
+		files, n, err := Payload(e.Root + "/" + p.Dir)
+		if err != nil {
+			return err
+		}
+		pl := plan{pkg: p, state: lookup(p.Module), bytes: n, files: files}
+		for _, d := range deps[p.Module] {
+			if inPlan[d] {
+				continue // published earlier in this same plan
+			}
+			if lookup(d) != StateLive {
+				pl.missing = append(pl.missing, d)
+			}
+		}
+		plans = append(plans, pl)
+	}
+
+	// The report goes to stderr so that `gnopm publish | sh` pipes only
+	// commands. Nothing here is a command.
+	e.logf("chain    %s (%s)\n", chain.ID, chain.RPC)
+	if chain.Host != "" {
+		e.logf("         discovered from %s\n", chain.Host)
+	}
+	e.logf("key      %s\n", key)
+	if gnokeyCmd != "gnokey" {
+		e.logf("client   %s\n", gnokeyCmd)
+	}
+	if !haveInert {
+		e.logf("note     vm/qinertpaths unavailable: this chain cannot park a\n" +
+			"         submission, so 'absent' really is absent\n")
+	}
+
+	todo, blocked := 0, 0
+	for _, pl := range plans {
+		e.logf("\n%-8s %s\n", pl.state, pl.pkg.Module)
+		e.logf("         %d bytes in %d file(s)", pl.bytes, len(pl.files))
+		if len(pl.files) > 0 {
+			e.logf(", largest %s at %d", pl.files[0].Name, pl.files[0].Size)
+		}
+		e.logf("\n")
+		for _, m := range pl.missing {
+			e.logf("         MISSING dependency, not live: %s\n", m)
+		}
+		switch {
+		case len(pl.missing) > 0:
+			blocked++
+		case pl.state == StateAbsent:
+			todo++
+		case pl.state == StateParked:
+			e.logf("         waiting on an approver; do not send it again\n")
+		}
+	}
+
+	if blocked > 0 {
+		return fmt.Errorf("%d package(s) have a dependency that is not live; publish those first", blocked)
+	}
+	if todo == 0 {
+		e.logf("\nnothing to publish\n")
+		return nil
+	}
+
+	e.logf("\n%d package(s) to publish, in dependency order\n", todo)
+	e.printf("#!/bin/sh\n# generated by gnopm publish; review before running.\n")
+	e.printf("# gnopm never signs: these are commands for you to run.\nset -e\n")
+	for _, pl := range plans {
+		if pl.state != StateAbsent || len(pl.missing) > 0 {
+			continue
+		}
+		gas := GasFor(pl.bytes)
+		e.printf("\n# %s: %d bytes, %d gas at %d/byte, fee %s at %s ugnot/gas\n",
+			pl.pkg.Module, pl.bytes, gas, gasPerByte, FeeFor(gas),
+			strconv.FormatFloat(float64(feeRatioMicro)/1e6, 'g', -1, 64))
+		e.printf("%s maketx addpkg \\\n", gnokeyCmd)
+		e.printf("  -pkgdir %s \\\n", shellQuote(e.Root+"/"+pl.pkg.Dir))
+		e.printf("  -pkgpath %s \\\n", shellQuote(pl.pkg.Module))
+		e.printf("  -gas-wanted %d \\\n", gas)
+		e.printf("  -gas-fee %s \\\n", FeeFor(gas))
+		e.printf("  -max-deposit %dugnot \\\n", DepositFor(pl.bytes))
+		e.printf("  -broadcast \\\n")
+		e.printf("  -chainid %s \\\n", chain.ID)
+		e.printf("  -remote %s \\\n", chain.RPC)
+		e.printf("  %s\n", key)
+	}
+	if haveInert {
+		e.printf("\n# This chain parks submissions: a green broadcast is NOT live.\n")
+		e.printf("# Re-run `gnopm publish` to see whether an approver enabled them.\n")
+	}
+	return nil
+}
+
+// shellQuote makes a value safe as one single-quoted shell word.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// namespaceOf returns the namespace element of a gno package path, which is
+// the third: domain / kind / namespace / name. An address namespace
+// (gno.land/r/g1…) is returned as-is; it is a poor key name but a better
+// starting point than nothing, and -key exists for it.
+func namespaceOf(module string) string {
+	parts := strings.Split(module, "/")
+	if len(parts) < 3 {
+		return ""
+	}
+	return parts[2]
+}

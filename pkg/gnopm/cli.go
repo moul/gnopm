@@ -146,6 +146,41 @@ substring against the module path or its directory.
 			run: cmdLs,
 		},
 		{
+			name: "publish", aliases: []string{"deploy"}, args: "[pattern]",
+			short: "what is missing on the chain, in dependency order, as gnokey commands",
+			long: `Reads the chain the package paths point at, reports what is live,
+parked or absent there, and writes a shell script of gnokey commands for
+whatever is missing, ordered so a dependency goes up before its dependents.
+
+gnopm never signs and never broadcasts. The script goes to stdout and the
+report to stderr, so it can be reviewed and then piped:
+
+  gnopm publish                    # read the report, read the script
+  gnopm publish -key alice | sh    # run it, once you have read it
+
+An optional pattern filters by substring against the module path or its
+directory. Only packages whose source is in the working tree are considered:
+a version pinned to history exists to keep imports resolving.
+
+The chain is discovered from the package path, so gno.land/... resolves to
+https://gno.land and the rpc and chain id it advertises. Override with -rpc
+and -chainid for a local gnodev.
+
+  -key      gnokey key name for the emitted commands (default: the namespace
+            in the package path, since a namespace is its owner)
+  -rpc         RPC endpoint, skipping discovery
+  -chainid     chain id, skipping discovery
+  -gnokey-cmd  the client to emit, if not "gnokey": a wrapper, a path, or
+               anything taking the same arguments`,
+			flags: func(fs *flag.FlagSet) {
+				fs.String("key", "", "gnokey key name (default: the namespace in the package path)")
+				fs.String("rpc", "", "RPC endpoint (default: discovered from the package path)")
+				fs.String("chainid", "", "chain id (default: discovered from the package path)")
+				fs.String("gnokey-cmd", "", `the client command to emit (default "gnokey")`)
+			},
+			run: cmdPublish,
+		},
+		{
 			name: "verify", aliases: []string{"check"},
 			short: "prove every pinned version still reproduces (the CI guard)",
 			long: `Writes nothing, exits non-zero with what to run.
@@ -499,6 +534,14 @@ func flagBool(fs *flag.FlagSet, name string) bool {
 		return false
 	}
 	return f.Value.String() == "true"
+}
+
+func flagString(fs *flag.FlagSet, name string) string {
+	f := fs.Lookup(name)
+	if f == nil {
+		return ""
+	}
+	return f.Value.String()
 }
 
 func flagInt(fs *flag.FlagSet, name string) int {
