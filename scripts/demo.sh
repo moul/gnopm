@@ -95,9 +95,8 @@ git_ init -q -b main
 git_ config user.email demo@example.com
 git_ config user.name "gnopm demo"
 : > "$repo/gnowork.toml"
-write .gitignore <<'EOF'
-/.gnopm/
-EOF
+# No .gitignore written here on purpose: gnopm adds /.gnopm/ itself the first
+# time it materializes anything, and the assertion below is that it did.
 commit "chore: empty gno workspace"
 
 # ---------------------------------------------------------------------------
@@ -284,6 +283,13 @@ out=$(gnopm status 2>&1); echo "$out"
 assert_grep "$out" "5 modules"
 assert_grep "$out" "5 in tree"
 commit "chore: gnomod.lock, still one directory per version"
+
+# gnopm created .gnopm/, so gnopm is the one that has to keep it out of git. A
+# committed assembly puts every superseded version straight back in the tree,
+# which is the problem this whole tool exists to remove.
+grep -q '^/\.gnopm/$' "$repo/.gitignore" || fail "gnopm did not ignore its own assembly"
+if git_ status --short | grep -q '\.gnopm'; then fail "git can still see the assembly"; fi
+ok "gnopm added /.gnopm/ to .gitignore itself"
 
 # ---------------------------------------------------------------------------
 step "the migration: gnopm deversion"

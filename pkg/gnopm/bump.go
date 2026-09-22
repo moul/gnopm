@@ -3,7 +3,6 @@ package gnopm
 import (
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 )
@@ -183,23 +182,6 @@ func findModule(l *Lock, module string) (LockEntry, bool, int) {
 		}
 	}
 	return LockEntry{}, false, -1
-}
-
-// ensureIgnored makes sure the assembly directory is gitignored, because a
-// committed .gnopm/ would reintroduce exactly the duplicated-source problem
-// the tool removes.
-func ensureIgnored(root string) error {
-	p := filepath.Join(root, ".gitignore")
-	b, err := os.ReadFile(p)
-	if err != nil {
-		return nil
-	}
-	for _, line := range strings.Split(string(b), "\n") {
-		if strings.TrimSpace(line) == "/"+assemblyDir+"/" {
-			return nil
-		}
-	}
-	return fmt.Errorf(".gitignore does not ignore /%s/, add it before running install", assemblyDir)
 }
 
 // BumpOptions is what bump was asked to do.
