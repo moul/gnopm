@@ -428,6 +428,23 @@ grep -q '"ok": true' <<<"$out" || fail "status should report ok"
 ok "status -json reports ok"
 
 # ---------------------------------------------------------------------------
+step "clean, and the claim that makes it safe: sync puts it all back"
+
+before=$(find "$repo/.gnopm" -type f | wc -l | tr -d ' ')
+[ "$before" -gt 0 ] || fail "nothing materialized, so this step proves nothing"
+echo "--- gnopm clean -n ---"
+out=$(gnopm clean -n 2>&1); echo "$out"
+assert_grep "$out" "would remove"
+[ -d "$repo/.gnopm" ] || fail "clean -n removed the assembly"
+echo "--- gnopm clean ---"
+gnopm clean
+if [ -d "$repo/.gnopm" ]; then fail "clean left the assembly behind"; fi
+gnopm sync
+after=$(find "$repo/.gnopm" -type f | wc -l | tr -d ' ')
+[ "$before" = "$after" ] || fail "sync rebuilt $after files, clean removed $before"
+ok "clean drops the assembly and sync rebuilds all $before files from the lock"
+
+# ---------------------------------------------------------------------------
 step "the guard: verify fails loudly on a lock that stopped being true"
 
 cp "$repo/gnomod.lock" "$repo/../gnomod.lock.bak" 2>/dev/null || cp "$repo/gnomod.lock" /tmp/gnomod.lock.bak

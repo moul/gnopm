@@ -358,6 +358,29 @@ gnopm unbump, one package at a time.
 			},
 		},
 		{
+			name:     "clean",
+			anywhere: true,
+			short:    "remove what gnopm generated and can rebuild",
+			long: `Removes the assembly directory, which holds the versions rebuilt from
+git history. Nothing there is source: ` + "`gnopm sync`" + ` rebuilds it byte for
+byte from gnomod.lock.
+
+The alternative is a line of rm -rf in every adopting repository's
+Makefile, which is the wrong owner: gnopm created the directory and gnopm
+knows its name.
+
+  -n       print what would go and remove nothing
+  -cache   also remove the shared chain cache (~/.gnopm), the way
+           go clean -cache does. Off by default: the assembly belongs to
+           this workspace, the cache is shared with every other one on the
+           machine. On its own it needs no workspace.`,
+			flags: func(fs *flag.FlagSet) {
+				fs.Bool("n", false, "print what would go and remove nothing")
+				fs.Bool("cache", false, "also remove the shared chain cache")
+			},
+			run: cmdClean,
+		},
+		{
 			name:  "env",
 			short: "show what gnopm worked out about this workspace",
 			long: `Everything gnopm detected rather than was told: the workspace root,
