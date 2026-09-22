@@ -324,9 +324,7 @@ func importsIn(src, domain string) []string {
 			// closes where it opened.
 			if rest := strings.TrimSpace(s[len("import ("):]); strings.HasSuffix(rest, ")") {
 				inBlock = false
-				for _, p := range quotedPaths(rest, domain) {
-					out = append(out, p)
-				}
+				out = append(out, quotedPaths(rest, domain)...)
 			}
 		case strings.HasPrefix(s, "import "):
 			if p, ok := importOnLine(s, domain); ok {
