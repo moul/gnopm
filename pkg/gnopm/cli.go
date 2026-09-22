@@ -6,6 +6,7 @@ import (
 	"io"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -116,7 +117,9 @@ type command struct {
 	// completesModules marks a command whose positional argument is a package,
 	// so shell completion offers the workspace's module paths and directories.
 	completesModules bool
-	run              func(*Env, *flag.FlagSet, []string) error
+	// group is which heading this command appears under in the usage text.
+	group string
+	run   func(*Env, *flag.FlagSet, []string) error
 }
 
 var commands []*command
@@ -125,6 +128,7 @@ func init() {
 	commands = []*command{
 		{
 			name: "status", aliases: []string{"st"},
+			group:   "everyday",
 			records: true,
 			short:   "show what the workspace resolves, and whether anything is out of date",
 			long: `Reports how many modules the workspace can resolve, where they come
@@ -136,6 +140,7 @@ the command that fixes it, rather than fixing it behind your back.`,
 		},
 		{
 			name: "sync", aliases: []string{"up"},
+			group: "everyday",
 			short: "make the state good: lock what is in the tree, materialize what is not",
 			long: `The one maintenance command. After it returns, the workspace is
 consistent: gnomod.lock describes the working tree, every version it
@@ -150,6 +155,7 @@ Run it after adding or removing a package. bump runs it for you.`,
 		},
 		{
 			name: "bump", args: "<package>",
+			group:            "everyday",
 			completesModules: true,
 			short:            "promote a package to its next version, in place",
 			long: `Pins the outgoing version to a commit that still holds it, rewrites
@@ -184,6 +190,7 @@ opt-in that lets it decide for itself.
 		},
 		{
 			name: "unbump", args: "<package>",
+			group:            "everyday",
 			completesModules: true,
 			short:            "fold an unpublished version back into the one before it",
 			long: `The inverse of bump, for the bump that should not have happened.
@@ -211,6 +218,7 @@ published version cannot be redefined by folding into it either.
 		},
 		{
 			name: "ls", aliases: []string{"list"}, args: "[pattern]",
+			group:            "inspect",
 			completesModules: true,
 			records:          true,
 			short:            "list resolvable modules and where their source is",
@@ -231,6 +239,7 @@ substring against the module path or its directory.
 		},
 		{
 			name: "why", args: "<module>",
+			group:            "inspect",
 			completesModules: true,
 			records:          true,
 			short:            "who still imports this version",
@@ -260,6 +269,7 @@ empty.
 		},
 		{
 			name: "graph", args: "[package]",
+			group:            "inspect",
 			completesModules: true,
 			short:            "the dependency graph, as graphviz DOT",
 			long: `Writes the import graph on stdout as graphviz DOT, so
@@ -304,6 +314,7 @@ or publish it.
 		},
 		{
 			name: "publish", aliases: []string{"deploy"}, args: "[pattern]",
+			group:            "chain",
 			completesModules: true,
 			short:            "what is missing on the chain, in dependency order, as gnokey commands",
 			long: `Reads the chain the package paths point at, reports what is live,
@@ -368,6 +379,7 @@ version you are about to publish.
 		},
 		{
 			name:  "merge-lock",
+			group: "prove and repair",
 			short: "resolve a conflicted gnomod.lock, then sync",
 			long: `Squash-merging a base branch makes every stacked branch conflict on
 gnomod.lock, and taking a side loses pins silently. --ours drops whatever
@@ -404,6 +416,7 @@ disappearing without anyone noticing, so silence is the wrong default.
 		},
 		{
 			name: "verify", aliases: []string{"check"},
+			group: "prove and repair",
 			short: "prove every pinned version still reproduces (the CI guard)",
 			long: `Writes nothing, exits non-zero with what to run.
 
@@ -427,6 +440,7 @@ Needs full git history. A shallow clone has none of the pinned commits.
 		},
 		{
 			name:  "tidy",
+			group: "prove and repair",
 			short: "make the whole workspace right, however long it takes",
 			long: `The heavy one. sync is the cheap, silent, idempotent command a
 Makefile prerequisite calls; tidy is the one you run when you want it
@@ -473,6 +487,7 @@ gnopm unbump, one package at a time.
 		},
 		{
 			name:     "clean",
+			group:    "prove and repair",
 			anywhere: true,
 			short:    "remove what gnopm generated and can rebuild",
 			long: `Removes the assembly directory, which holds the versions rebuilt from
@@ -496,6 +511,7 @@ knows its name.
 		},
 		{
 			name: "completion", args: "[bash|zsh|fish]",
+			group:    "automation",
 			anywhere: true,
 			short:    "print the shell completion script",
 			long: `Prints a completion script on stdout. With no argument, the shell is
@@ -528,6 +544,7 @@ static script could not offer at all.`,
 		},
 		{
 			name:    "env",
+			group:   "inspect",
 			records: true,
 			short:   "show what gnopm worked out about this workspace",
 			long: `Everything gnopm detected rather than was told: the workspace root,
@@ -540,6 +557,7 @@ with.`,
 		},
 		{
 			name:     "version",
+			group:    "inspect",
 			anywhere: true,
 			records:  true,
 			short:    "print the gnopm version",
@@ -547,6 +565,7 @@ with.`,
 		},
 		{
 			name: "tool", args: "ci [github]",
+			group: "automation",
 			short: "run a gnopm tool: `ci` checks a repository and reports",
 			long: `gnopm tool ci
 
@@ -589,6 +608,7 @@ environment.`,
 		},
 		{
 			name:  "badges",
+			group: "inspect",
 			short: "shields.io badges describing this workspace",
 			long: `Markdown by default, the shields endpoint shape with -json.
 
@@ -598,6 +618,7 @@ claim nobody re-checks.`,
 		},
 		{
 			name:  "deversion",
+			group: "prove and repair",
 			short: "one-time migration: lift every pkg/vN directory up to pkg",
 			long: `For a repository that still keeps each version in its own directory.
 
@@ -633,25 +654,113 @@ func lookup(name string) *command {
 	return nil
 }
 
+// globalOption is one option that goes anywhere on the line, before or after
+// the command name.
+//
+// One list, read by four things: the usage text, the parser that hoists them
+// past the command name, the error when somebody invents one, and shell
+// completion. They used to be three separate hard-coded lists, which is how
+// `-v` and `-no-cache` ended up missing from the error that tells you which
+// options are global.
+type globalOption struct {
+	name string
+	// arg names the value it takes, "" for a boolean.
+	arg  string
+	help string
+}
+
+var globalOptions = []globalOption{
+	{"C", "<dir>", "run as if started in <dir>"},
+	{"q", "", "terse output, module paths only where that makes sense"},
+	{"json", "", "machine-readable output"},
+	{"f", "<tmpl>", "go-template over each record, as `gno list -f` does"},
+	{"v", "", "say what is being checked, and where each answer came from"},
+	{"no-cache", "", "ask the chain everything, ignoring ~/.gnopm"},
+}
+
+// recordCommands lists the commands -f applies to, read off the table rather
+// than written out, because a hand-written list is a list that goes stale the
+// next time a command gains records. This one already had: it named five while
+// six were true.
+func recordCommands() string {
+	var out []string
+	for _, c := range commands {
+		if c.records {
+			out = append(out, c.name)
+		}
+	}
+	return strings.Join(out, ", ")
+}
+
+func lookupGlobal(name string) (globalOption, bool) {
+	for _, g := range globalOptions {
+		if g.name == name {
+			return g, true
+		}
+	}
+	return globalOption{}, false
+}
+
+// globalNames renders the list for an error message: "-C, -q, -json, ...".
+func globalNames() string {
+	out := make([]string, 0, len(globalOptions))
+	for _, g := range globalOptions {
+		out = append(out, "-"+g.name)
+	}
+	return strings.Join(out, ", ")
+}
+
+// groups order the command list in the usage text.
+//
+// Eighteen commands in one flat column is a wall, and the first thing anybody
+// needs to know is which four they will type every day. The order is the order
+// you meet them in.
+var groups = []struct{ title, blurb string }{
+	{"everyday", "the ones you type"},
+	{"inspect", "read-only questions about this workspace"},
+	{"chain", "what is deployed, and what it would take to deploy the rest"},
+	{"prove and repair", "the guards, and the commands that fix what they find"},
+	{"automation", "for CI, editors and shells"},
+}
+
 func usage(w io.Writer) {
 	fmt.Fprint(w, "gnopm keeps a package's version in gnomod.toml instead of in its directory name.\n\n")
-	fmt.Fprint(w, "usage: gnopm <command> [options]\n\n")
+	fmt.Fprint(w, "usage: gnopm <command> [options]\n")
 	width := 0
 	for _, c := range commands {
 		if len(c.name) > width {
 			width = len(c.name)
 		}
 	}
-	for _, c := range commands {
-		fmt.Fprintf(w, "  %-*s  %s\n", width, c.name, c.short)
+	for _, g := range groups {
+		var in []*command
+		for _, c := range commands {
+			if c.group == g.title {
+				in = append(in, c)
+			}
+		}
+		if len(in) == 0 {
+			continue
+		}
+		fmt.Fprintf(w, "\n%s: %s\n", g.title, g.blurb)
+		for _, c := range in {
+			fmt.Fprintf(w, "  %-*s  %s\n", width, c.name, c.short)
+		}
 	}
-	fmt.Fprint(w, "\nglobal options:\n")
-	fmt.Fprint(w, "  -C <dir>   run as if started in <dir>\n")
-	fmt.Fprint(w, "  -q         terse output, module paths only where that makes sense\n")
-	fmt.Fprint(w, "  -json      machine-readable output\n")
-	fmt.Fprint(w, "  -f <tmpl>  go-template over each record, as `gno list -f` does\n")
-	fmt.Fprint(w, "  -v         say what is being checked, and where each answer came from\n")
-	fmt.Fprint(w, "  -no-cache  ask the chain everything, ignoring ~/.gnopm\n")
+	fmt.Fprint(w, "\nglobal options, before or after the command name:\n")
+	gw := 0
+	for _, g := range globalOptions {
+		if n := len(g.name) + len(g.arg) + 1; n > gw {
+			gw = n
+		}
+	}
+	for _, g := range globalOptions {
+		name := "-" + g.name
+		if g.arg != "" {
+			name += " " + g.arg
+		}
+		fmt.Fprintf(w, "  %-*s  %s\n", gw+1, name, g.help)
+	}
 	fmt.Fprint(w, "\n`gnopm help <command>` for detail. Start with `gnopm status`.\n")
 }
 
@@ -667,29 +776,94 @@ func helpFor(w io.Writer, c *command) {
 
 // suggest finds the closest command name, so a typo is one line of help and
 // not a wall of usage.
-func suggest(name string) string {
-	best, bestScore := "", 0
+// suggest names the command somebody probably meant, or "".
+//
+// Two rules, tried in order.
+//
+// A prefix wins outright, because an abbreviation is the commonest way to get
+// a command name wrong and it is not a typo at all: `gnopm ver` means one of
+// two things and saying both is more use than picking one.
+//
+// Otherwise edit distance, which is what the previous common-prefix version
+// could not do: `gnopm grpah` shares one letter with `graph`, scored below the
+// threshold, and answered "Run `gnopm help`". A transposition is the second
+// commonest way to mistype a word and it is exactly the case a prefix score is
+// blind to.
+func suggest(name string) []string {
+	if name == "" {
+		return nil
+	}
+	var prefix []string
 	for _, c := range commands {
-		all := append([]string{c.name}, c.aliases...)
-		for _, cand := range all {
-			s := commonPrefix(name, cand)
-			if s > bestScore {
-				best, bestScore = c.name, s
+		if strings.HasPrefix(c.name, name) {
+			prefix = append(prefix, c.name)
+		}
+	}
+	// Three is where a list stops helping and starts being the usage text.
+	if len(prefix) > 0 && len(prefix) <= 3 {
+		return prefix
+	}
+	if len(prefix) > 3 {
+		return nil
+	}
+	// A third of the word, floored at two, so a five-letter command tolerates
+	// a transposition and a nonsense word matches nothing.
+	limit := len(name)/3 + 1
+	if limit < 2 {
+		limit = 2
+	}
+	best, bestD := "", limit+1
+	for _, c := range commands {
+		for _, cand := range append([]string{c.name}, c.aliases...) {
+			if d := editDistance(name, cand); d < bestD {
+				best, bestD = c.name, d
 			}
 		}
 	}
-	if bestScore >= 2 {
-		return best
+	if best == "" {
+		return nil
 	}
-	return ""
+	return []string{best}
 }
 
-func commonPrefix(a, b string) int {
-	n := 0
-	for n < len(a) && n < len(b) && a[n] == b[n] {
-		n++
+// editDistance is Levenshtein, iterative with one row of state.
+//
+// Byte-wise rather than rune-wise on purpose: every command name is ASCII, and
+// a mistyped command name that is not ASCII is not a near miss.
+func editDistance(a, b string) int {
+	prev := make([]int, len(b)+1)
+	cur := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
 	}
-	return n
+	for i := 1; i <= len(a); i++ {
+		cur[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			cur[j] = min(min(cur[j-1]+1, prev[j]+1), prev[j-1]+cost)
+		}
+		prev, cur = cur, prev
+	}
+	return prev[len(b)]
+}
+
+// phrase renders a suggestion list as "`gnopm a`, `gnopm b` or `gnopm c`".
+func phrase(names []string) string {
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = "`gnopm " + n + "`"
+	}
+	switch len(quoted) {
+	case 1:
+		return quoted[0]
+	case 2:
+		return quoted[0] + " or " + quoted[1]
+	default:
+		return strings.Join(quoted[:len(quoted)-1], ", ") + " or " + quoted[len(quoted)-1]
+	}
 }
 
 // hoistGlobals pulls the global options out from in front of the subcommand,
@@ -735,24 +909,24 @@ func hoistGlobals(args []string) (name string, globals, rest []string, err error
 			i++
 			continue
 		}
-		switch opt {
-		case "C":
-			if i+1 >= len(args) {
-				return "", nil, nil, fmt.Errorf("-C needs a directory")
+		// -format is the documented alias of -f and is hoisted with it,
+		// because a user who reaches for the long spelling reaches for it in
+		// the same position.
+		if opt == "format" {
+			opt = "f"
+		}
+		g, ok := lookupGlobal(opt)
+		if !ok {
+			return "", nil, nil, fmt.Errorf("%q is not a global option. %s go anywhere; every other option goes after the command name", a, globalNames())
+		}
+		globals = append(globals, a)
+		i++
+		if g.arg != "" {
+			if i >= len(args) {
+				return "", nil, nil, fmt.Errorf("-%s needs %s", opt, strings.Trim(g.arg, "<>"))
 			}
-			globals = append(globals, a, args[i+1])
-			i += 2
-		case "f", "format":
-			if i+1 >= len(args) {
-				return "", nil, nil, fmt.Errorf("-%s needs a template", opt)
-			}
-			globals = append(globals, a, args[i+1])
-			i += 2
-		case "q", "json", "v", "no-cache":
-			globals = append(globals, a)
+			globals = append(globals, args[i])
 			i++
-		default:
-			return "", nil, nil, fmt.Errorf("%q is not a global option. -C, -q, -json and -f go anywhere; every other option goes after the command name", a)
 		}
 	}
 	if i >= len(args) {
@@ -808,8 +982,8 @@ func Run(args []string, out, errw io.Writer) error {
 
 	c := lookup(name)
 	if c == nil {
-		if s := suggest(name); s != "" {
-			return fmt.Errorf("unknown command %q. Did you mean `gnopm %s`?", name, s)
+		if s := suggest(name); len(s) > 0 {
+			return fmt.Errorf("unknown command %q. Did you mean %s?", name, phrase(s))
 		}
 		return fmt.Errorf("unknown command %q. Run `gnopm help`.", name)
 	}
@@ -844,7 +1018,7 @@ func Run(args []string, out, errw io.Writer) error {
 	if tmpl != "" {
 		if !c.records {
 			return fmt.Errorf("`gnopm %s` has no records to template, so -f means nothing here.\n"+
-				"  -f works on the commands that also take -json: ls, why, status, env, version", c.name)
+				"  -f works on: %s", c.name, recordCommands())
 		}
 		// The same refusal `gno list` makes, for the same reason: two output
 		// shapes asked for at once is a mistake, and picking one silently
@@ -923,8 +1097,7 @@ func flagInt(fs *flag.FlagSet, name string) int {
 	if f == nil {
 		return 0
 	}
-	var n int
-	fmt.Sscanf(f.Value.String(), "%d", &n)
+	n, _ := strconv.Atoi(f.Value.String())
 	return n
 }
 
