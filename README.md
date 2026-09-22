@@ -38,8 +38,10 @@ A bump is one line, and then the real diff:
 </p>
 
 Superseded versions are pinned in `gnomod.lock` to the commit that still holds
-them and rebuilt into a gitignored `.gnopm/` on demand, so anything importing
-`.../md/v0` keeps resolving. Nothing in there is source, so `gnopm clean` drops
+them and rebuilt into a `.gnopm/` on demand, so anything importing `.../md/v0`
+keeps resolving. gnopm creates that directory, so gnopm is the one that keeps it
+out of git: the first time it materializes anything it adds `/.gnopm/` to
+`.gitignore`, unless git already ignores it some other way. Nothing in there is source, so `gnopm clean` drops
 it and `gnopm sync` puts it back byte for byte; `gnopm clean -cache` also drops
 the shared chain cache, the way `go clean -cache` does.
 

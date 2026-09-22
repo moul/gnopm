@@ -46,6 +46,11 @@ func Install(e *Env) error {
 	if cur, err := os.ReadFile(filepath.Join(asm, stampFile)); err == nil && strings.TrimSpace(string(cur)) == stamp {
 		return nil
 	}
+	// Before writing anything into it, not after: the window between creating
+	// the directory and ignoring it is exactly when somebody runs git add.
+	if err := ensureIgnored(e); err != nil {
+		return err
+	}
 
 	var extract []archiveEntry
 	var extractOf []LockEntry
@@ -109,7 +114,61 @@ func Install(e *Env) error {
 		e.logf("assembly updated: %d materialized (%d extracted, %d cached, %d pruned)\n",
 			len(want), len(extract), kept, pruned)
 	}
-	_ = kept
+	return nil
+}
+
+// ensureIgnored makes sure the assembly directory is ignored by git, and
+// writes the rule when it is not.
+//
+// A committed .gnopm/ reintroduces exactly the duplicated-source problem the
+// tool exists to remove: every superseded version back in the tree, in a
+// directory nobody should read and every reviewer has to scroll past. So every
+// adopting repository needs this one line, and a tool that creates a directory
+// and then leaves you to remember to ignore it is a tool that gets blamed for
+// the first accidental commit.
+//
+// Detection is `git check-ignore`, not a string compare against .gitignore.
+// The rule can be spelled half a dozen ways, can live in .git/info/exclude or
+// in a user's global excludes, and can come from a parent directory. Asking
+// git is the only answer that is right in all of those, and the alternative
+// was a function that refused to run rather than fixing it.
+//
+// Silent when there is nothing to do, loud exactly once when it writes.
+func ensureIgnored(e *Env) error {
+	root := e.Root
+	if _, err := git(root, "rev-parse", "--git-dir"); err != nil {
+		return nil // not a git repository: nothing to ignore it with
+	}
+	// The trailing slash is load-bearing. /.gnopm/ is a directory-only
+	// pattern, and `git check-ignore .gnopm` on a path that does not exist yet
+	// cannot know it is a directory, so it answers "not ignored" and this
+	// function appends the rule again on every run. Asking about ".gnopm/"
+	// tells git it is a directory whether or not it is there, which is the
+	// state this runs in: before anything has been written into it.
+	//
+	// check-ignore exits 1 when the path is NOT ignored, which is an answer
+	// and not a failure, so the error is deliberately discarded.
+	if _, err := git(root, "check-ignore", "-q", assemblyDir+"/"); err == nil {
+		return nil
+	}
+	p := filepath.Join(root, ".gitignore")
+	b, err := os.ReadFile(p)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	text := string(b)
+	if text != "" && !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	// Anchored and directory-scoped: /.gnopm/ ignores the assembly at the
+	// workspace root and nothing else, where a bare .gnopm would also swallow
+	// a file of that name anywhere in the tree.
+	text += "\n# gnopm's assembly: rebuilt from gnomod.lock, never committed.\n/" + assemblyDir + "/\n"
+	if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
+		return err
+	}
+	e.logf("%s: added /%s/, which gnopm rebuilds from %s and nothing should commit\n",
+		filepath.Base(p), assemblyDir, lockFile)
 	return nil
 }
 
