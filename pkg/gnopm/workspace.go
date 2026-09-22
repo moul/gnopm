@@ -122,6 +122,13 @@ func readGnomod(p string) (module string, ignored bool, err error) {
 	if err != nil {
 		return "", false, err
 	}
+	return parseGnomod(b, p)
+}
+
+// parseGnomod is readGnomod over bytes, so a gnomod.toml read out of git
+// history goes through exactly the same parser as one read off disk. name is
+// used only in the error.
+func parseGnomod(b []byte, name string) (module string, ignored bool, err error) {
 	for _, line := range strings.Split(string(b), "\n") {
 		line = strings.TrimSpace(line)
 		switch {
@@ -141,7 +148,7 @@ func readGnomod(p string) (module string, ignored bool, err error) {
 		}
 	}
 	if module == "" {
-		return "", false, fmt.Errorf("%s: no module declaration", p)
+		return "", false, fmt.Errorf("%s: no module declaration", name)
 	}
 	return module, ignored, nil
 }

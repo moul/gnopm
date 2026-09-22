@@ -14,6 +14,9 @@ type CIOptions struct {
 	Comment bool
 	// Base is the ref to compare against. Empty means detect it.
 	Base string
+	// RPC and ChainID skip chain discovery, as they do on bump and tidy: for
+	// a local gnodev, and for the test that drives a fake chain.
+	RPC, ChainID string
 }
 
 // CI is the whole of a repository's gnopm continuous integration.
@@ -42,14 +45,21 @@ func CI(e *Env, opts CIOptions) error {
 	type check struct {
 		name, detail string
 		ok           bool
+		// warn is reported and does not fail the run. Reserved for the thing
+		// that is worth saying out loud but that a repository may have a good
+		// reason to do: turning those red teaches people to skip the check.
+		warn bool
 	}
 	var checks []check
 	add := func(name string, err error, okDetail string) {
 		if err != nil {
-			checks = append(checks, check{name, firstLine(err.Error()), false})
+			checks = append(checks, check{name, firstLine(err.Error()), false, false})
 			return
 		}
-		checks = append(checks, check{name, okDetail, true})
+		checks = append(checks, check{name, okDetail, true, false})
+	}
+	skip := func(name, why string) {
+		checks = append(checks, check{name, "skipped: " + why, true, false})
 	}
 
 	// Each check is reported separately rather than as one pass/fail, because
@@ -58,15 +68,45 @@ func CI(e *Env, opts CIOptions) error {
 	add("pinned versions reproduce from history", reproduces(e.Root, pinned),
 		fmt.Sprintf("%d version(s) rebuilt and hashed", len(pinned)))
 	if base == "" {
-		checks = append(checks, check{"pins survive a squash merge", "skipped: no upstream ref detected", true})
+		skip("pins survive a squash merge", "no upstream ref detected")
+		skip(publishedEditCheck, "no upstream ref detected")
 	} else {
 		add("pins survive a squash merge", stranded(e.Root, pinned, base),
 			"every pin is already on "+base)
+
+		// The one check that needs a chain, and the one that warns instead of
+		// failing. It runs last so a network round trip never delays a verdict
+		// the repository could reach on its own.
+		switch edited, err := editedInPlace(e.Root, pkgs, base); {
+		case err != nil:
+			skip(publishedEditCheck, firstLine(err.Error()))
+		case len(edited) == 0:
+			checks = append(checks, check{publishedEditCheck, "no package edited in place", true, false})
+		default:
+			probe, err := NewProbe(e, edited[0].Module, opts.RPC, opts.ChainID)
+			if err != nil {
+				// Offline, or the chain is down. The candidates are still worth
+				// naming: an author reading this knows which ones to check.
+				skip(publishedEditCheck, fmt.Sprintf("%d package(s) edited in place, chain unreachable: %s",
+					len(edited), firstLine(err.Error())))
+				break
+			}
+			hit, err := publishedEdits(edited, probe.Published)
+			switch {
+			case err != nil:
+				skip(publishedEditCheck, firstLine(err.Error()))
+			case len(hit) == 0:
+				checks = append(checks, check{publishedEditCheck,
+					fmt.Sprintf("%d edited in place, none published on %s", len(edited), probe.Chain().ID), true, false})
+			default:
+				checks = append(checks, check{publishedEditCheck, editedWarning(hit), false, true})
+			}
+		}
 	}
 
 	failed := 0
 	for _, c := range checks {
-		if !c.ok {
+		if !c.ok && !c.warn {
 			failed++
 		}
 	}
@@ -79,7 +119,10 @@ func CI(e *Env, opts CIOptions) error {
 	b.WriteString("| | check | detail |\n|---|---|---|\n")
 	for _, c := range checks {
 		mark := "✅"
-		if !c.ok {
+		switch {
+		case c.warn:
+			mark = "⚠️"
+		case !c.ok:
 			mark = "❌"
 		}
 		b.WriteString(fmt.Sprintf("| %s | %s | %s |\n", mark, c.name, c.detail))
@@ -118,6 +161,10 @@ func CI(e *Env, opts CIOptions) error {
 }
 
 const ciMarker = "<!-- gnopm-ci-report -->"
+
+// publishedEditCheck is named once: the report, the skips and the tests all
+// read the same string, so a reworded check cannot half-rename itself.
+const publishedEditCheck = "published versions are not edited in place"
 
 func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
