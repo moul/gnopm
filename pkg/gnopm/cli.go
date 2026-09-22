@@ -420,19 +420,28 @@ with.`,
 
 Runs the checks a repository actually wants in CI and writes a Markdown
 report: that the lock describes the working tree, that every pinned
-version reproduces from history, and that no pin would be discarded by a
-squash merge. Exits non-zero when one fails.
+version reproduces from history, that no pin would be discarded by a
+squash merge, and that the branch did not edit a version the chain has
+already published. Exits non-zero when one of the first three fails.
+
+The published-edit check WARNS rather than fails, because a repository
+can have a fair reason to touch a published version and a red build for
+it teaches people to skip the check. It costs one chain read, and skips
+itself when there is no chain to reach.
 
 The report goes to stdout and, in GitHub Actions, to the job summary.
 
-  --comment   post it as one sticky pull request comment, updated in
-              place on later runs. Needs GITHUB_TOKEN.
+  --comment       post it as one sticky pull request comment, updated in
+                  place on later runs. Needs GITHUB_TOKEN.
+  -rpc, -chainid  skip chain discovery, for a local gnodev.
 
 The provider argument is optional; GitHub is detected from the
 environment.`,
 			flags: func(fs *flag.FlagSet) {
 				fs.Bool("comment", false, "post the report as a sticky pull request comment")
 				fs.String("base", "", "ref to compare against (detected by default)")
+				fs.String("rpc", "", "chain RPC endpoint, skipping discovery")
+				fs.String("chainid", "", "chain id, skipping discovery")
 			},
 			run: func(e *Env, fs *flag.FlagSet, args []string) error {
 				if len(args) > 0 && args[0] != "ci" && args[0] != "github" {
@@ -441,6 +450,8 @@ environment.`,
 				return CI(e, CIOptions{
 					Comment: flagBool(fs, "comment"),
 					Base:    fs.Lookup("base").Value.String(),
+					RPC:     fs.Lookup("rpc").Value.String(),
+					ChainID: fs.Lookup("chainid").Value.String(),
 				})
 			},
 		},
