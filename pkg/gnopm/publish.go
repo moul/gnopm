@@ -308,12 +308,26 @@ func importsIn(src, domain string) []string {
 			if p, ok := importOnLine(s, domain); ok {
 				out = append(out, p)
 			}
+			// gofmt would not write `"path")`, but a block that never closes
+			// would make the rest of the file look like imports again, which
+			// is the bug this function exists to remove.
+			if strings.HasSuffix(s, ")") {
+				inBlock = false
+			}
 			continue
 		}
 
 		switch {
-		case s == "import (" || strings.HasPrefix(s, "import ("):
+		case strings.HasPrefix(s, "import ("):
 			inBlock = true
+			// A whole block on one line, `import ( "a"; "b" )`, is legal and
+			// closes where it opened.
+			if rest := strings.TrimSpace(s[len("import ("):]); strings.HasSuffix(rest, ")") {
+				inBlock = false
+				for _, p := range quotedPaths(rest, domain) {
+					out = append(out, p)
+				}
+			}
 		case strings.HasPrefix(s, "import "):
 			if p, ok := importOnLine(s, domain); ok {
 				out = append(out, p)
@@ -325,6 +339,21 @@ func importsIn(src, domain string) []string {
 		}
 	}
 	return out
+}
+
+// quotedPaths pulls every domain-prefixed quoted path out of one line, for the
+// one-line import block where several can share it.
+func quotedPaths(line, domain string) []string {
+	var out []string
+	for {
+		p, ok := importOnLine(line, domain)
+		if !ok {
+			return out
+		}
+		out = append(out, p)
+		i := strings.Index(line, `"`+p+`"`)
+		line = line[i+len(p)+2:]
+	}
 }
 
 // importOnLine pulls a domain-prefixed import out of one line of an import

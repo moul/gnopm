@@ -472,3 +472,22 @@ func TestImportsInReadsOnlyTheImportDeclaration(t *testing.T) {
 		}
 	}
 }
+
+// TestImportsInClosesTheBlock covers the shapes gofmt does not write but the
+// grammar allows. A block that never closes would put the scanner back to
+// reading the whole file, which is the failure mode this replaced.
+func TestImportsInClosesTheBlock(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		src  string
+		want int
+	}{
+		{"one-line block", "package x\n\nimport ( \"gno.land/p/a/v0\"; \"gno.land/p/b/v0\" )\n\nconst c = \"gno.land/r/ghost/v0\"\n", 2},
+		{"empty one-line block", "package x\n\nimport ()\n\nconst c = \"gno.land/r/ghost/v0\"\n", 0},
+		{"closing paren on the last import", "package x\n\nimport (\n\t\"gno.land/p/a/v0\")\n\nconst c = \"gno.land/r/ghost/v0\"\n", 1},
+	} {
+		if got := importsIn(tc.src, "gno.land"); len(got) != tc.want {
+			t.Errorf("%s: importsIn = %q, want %d path(s)", tc.name, got, tc.want)
+		}
+	}
+}
