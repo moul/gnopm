@@ -208,18 +208,29 @@ func reach(adj map[string][]string, start string, seen map[string]bool) {
 // every edge at it, which is the graph a README wants: one node per package,
 // and no history.
 func collapseVersions(g *Graph) {
-	best := map[string]string{} // unversioned base -> chosen module
+	// The two kinds of key live in separate namespaces, and they have to.
+	//
+	// A versioned module keys on its unversioned base, and a module with no
+	// version keys on its own path, so gno.land/p/demo/ufmt and
+	// gno.land/p/demo/ufmt/v0 collided on the same string. The unversioned one
+	// was written first with rank 0, v0's `0 > 0` lost, and the whole versioned
+	// family was then redirected onto an unrelated package: v0 vanished from
+	// the picture and every edge into it was redrawn onto gno.land/p/demo/ufmt.
+	//
+	// That shape is not exotic here. It is what a migration looks like halfway
+	// through: the old unversioned path still on chain, the new versioned one
+	// beside it.
+	best := map[string]string{}
 	rank := map[string]int{}
 	for _, n := range g.Nodes {
-		base, v, ok := splitVersion(n.Module)
-		if !ok {
-			best[n.Module] = n.Module
+		if base, v, ok := splitVersion(n.Module); ok {
+			if cur, seen := best["v\x00"+base]; !seen || v > rank[cur] {
+				best["v\x00"+base] = n.Module
+				rank[n.Module] = v
+			}
 			continue
 		}
-		if cur, seen := best[base]; !seen || v > rank[cur] {
-			best[base] = n.Module
-			rank[n.Module] = v
-		}
+		best["m\x00"+n.Module] = n.Module
 	}
 	to := map[string]string{}
 	for _, n := range g.Nodes {
@@ -228,7 +239,7 @@ func collapseVersions(g *Graph) {
 			to[n.Module] = n.Module
 			continue
 		}
-		to[n.Module] = best[base]
+		to[n.Module] = best["v\x00"+base]
 	}
 	var nodes []GraphNode
 	kept := map[string]bool{}
