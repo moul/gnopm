@@ -29,15 +29,19 @@ func Status(e *Env) error {
 	lockOK, lockWhy := lockState(lock, pkgs)
 	asmOK, asmWhy := assemblyState(e.Root, lock, pinned)
 
+	rec := StatusRecord{
+		Modules:  len(lock.Modules),
+		Tree:     len(pkgs),
+		Pinned:   len(pinned),
+		OK:       lockOK && asmOK,
+		Lock:     lockWhy,
+		Assembly: asmWhy,
+	}
 	if e.JSON {
-		return e.writeJSON(map[string]any{
-			"modules":  len(lock.Modules),
-			"tree":     len(pkgs),
-			"pinned":   len(pinned),
-			"ok":       lockOK && asmOK,
-			"lock":     lockWhy,
-			"assembly": asmWhy,
-		})
+		return e.writeJSON(rec)
+	}
+	if e.Format != "" {
+		return e.emit(rec)
 	}
 
 	e.printf("%d modules   %d in tree   %d pinned to history\n", len(lock.Modules), len(pkgs), len(pinned))
@@ -102,19 +106,25 @@ func cmdLs(e *Env, fs *flag.FlagSet, args []string) error {
 		rows = append(rows, m)
 	}
 
+	recs := make([]LsRecord, 0, len(rows))
+	for _, m := range rows {
+		recs = append(recs, LsRecord{
+			Module: m.Module,
+			Source: m.Source.Variant(),
+			Dir:    m.Source.Dir,
+			Commit: m.Source.Commit,
+			Hash:   m.Hash,
+		})
+	}
 	if e.JSON {
-		out := make([]map[string]any, 0, len(rows))
-		for _, m := range rows {
-			rec := map[string]any{"module": m.Module, "source": m.Source.Variant(), "dir": m.Source.Dir}
-			if m.Source.Commit != "" {
-				rec["commit"] = m.Source.Commit
-			}
-			if m.Hash != "" {
-				rec["hash"] = m.Hash
-			}
-			out = append(out, rec)
+		return e.writeJSON(recs)
+	}
+	if e.Format != "" {
+		vals := make([]any, len(recs))
+		for i := range recs {
+			vals[i] = recs[i]
 		}
-		return e.writeJSON(out)
+		return e.emit(vals...)
 	}
 	if e.Quiet {
 		for _, m := range rows {
@@ -234,8 +244,12 @@ func (e *Env) writeJSON(v any) error {
 // Its absence was a paper cut: `gnopm version` suggested `gnopm verify`.
 func cmdVersion(e *Env) error {
 	v, rev, dirty := buildVersion()
+	rec := VersionRecord{Version: v, Revision: rev, Dirty: dirty}
 	if e.JSON {
-		return e.writeJSON(map[string]any{"version": v, "revision": rev, "dirty": dirty})
+		return e.writeJSON(rec)
+	}
+	if e.Format != "" {
+		return e.emit(rec)
 	}
 	line := "gnopm " + v
 	if rev != "" {
@@ -267,22 +281,28 @@ func cmdEnv(e *Env) error {
 	if cache == "" {
 		cache = "(off)"
 	}
-	vals := [][2]string{
-		{"GNOPM_ROOT", e.Root},
-		{"GNOPM_LOCK", lock},
-		{"GNOPM_ASSEMBLY", filepath.Join(e.Root, assemblyDir)},
-		{"GNOPM_UPSTREAM", upstream},
-		{"GNOPM_CACHE", cache},
-		{"GNOHOME", gnoHome()},
+	rec := EnvRecord{
+		Root:     e.Root,
+		Lock:     lock,
+		Assembly: filepath.Join(e.Root, assemblyDir),
+		Upstream: upstream,
+		Cache:    cache,
+		GnoHome:  gnoHome(),
 	}
 	if e.JSON {
-		m := map[string]any{}
-		for _, kv := range vals {
-			m[kv[0]] = kv[1]
-		}
-		return e.writeJSON(m)
+		return e.writeJSON(rec)
 	}
-	for _, kv := range vals {
+	if e.Format != "" {
+		return e.emit(rec)
+	}
+	for _, kv := range [][2]string{
+		{"GNOPM_ROOT", rec.Root},
+		{"GNOPM_LOCK", rec.Lock},
+		{"GNOPM_ASSEMBLY", rec.Assembly},
+		{"GNOPM_UPSTREAM", rec.Upstream},
+		{"GNOPM_CACHE", rec.Cache},
+		{"GNOHOME", rec.GnoHome},
+	} {
 		e.printf("%s=%q\n", kv[0], kv[1])
 	}
 	return nil
