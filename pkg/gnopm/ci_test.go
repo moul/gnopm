@@ -3,6 +3,7 @@ package gnopm
 import (
 	"bytes"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -67,10 +68,14 @@ func TestCIFailsOnAStrandedPin(t *testing.T) {
 	if !strings.Contains(out.String(), "gnopm tidy") {
 		t.Errorf("the report does not say how to fix it:\n%s", out.String())
 	}
-	// And the two checks that did pass still say so, so the reader can see
-	// the failure is narrow.
-	if strings.Count(out.String(), "✅") != 2 {
-		t.Errorf("expected the other two checks to pass:\n%s", out.String())
+	// And only that check fails, so the reader can see the failure is narrow.
+	// Counting failures rather than passes: the number of checks grows, and a
+	// test that pinned it broke every time one was added, which is what it did.
+	if got := strings.Count(out.String(), "❌"); got != 1 {
+		t.Errorf("expected exactly one failing check, got %d:\n%s", got, out.String())
+	}
+	if strings.Contains(out.String(), "⚠️") {
+		t.Errorf("a stranded pin is a failure, not a warning:\n%s", out.String())
 	}
 }
 
@@ -138,5 +143,103 @@ func TestBadgeEscaping(t *testing.T) {
 	}
 	if got := esc("a b"); got != "a%20b" {
 		t.Fatalf("esc(%q) = %q", "a b", got)
+	}
+}
+
+// TestEditedInPlaceSeesOnlyWhatReachesAChain.
+//
+// No existing test could see any of this: every one of them drove the lock,
+// and the lock is exactly what stays consistent while a published version is
+// edited. That is the hole this check exists to close.
+func TestEditedInPlaceSeesOnlyWhatReachesAChain(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "p/moul/md", "gno.land/p/moul/md/v0", "package md\n")
+	addPkg(t, root, "p/moul/kit", "gno.land/p/moul/kit/v0", "package kit\n")
+	addPkg(t, root, "p/moul/tests", "gno.land/p/moul/tests/v0", "package tests\n")
+	commit(t, root, "seed")
+	mustRun(t, root, "sync")
+	commit(t, root, "lock")
+	gitCmd(t, root, "update-ref", "refs/remotes/origin/main", "HEAD")
+	gitCmd(t, root, "checkout", "-q", "-b", "feature")
+
+	// md: production source edited, module line untouched. The mistake.
+	write(t, filepath.Join(root, "p/moul/md/md.gno"), "package md // edited\n")
+	// kit: edited AND bumped, which is the correct shape and must not warn.
+	write(t, filepath.Join(root, "p/moul/kit/kit.gno"), "package kit // edited\n")
+	// tests: only a test file, which is never deployed, so it cannot diverge.
+	write(t, filepath.Join(root, "p/moul/tests/tests_test.gno"), "package tests\n")
+	// A package the branch adds has no published version to contradict.
+	addPkg(t, root, "p/moul/new", "gno.land/p/moul/new/v0", "package new\n")
+	commit(t, root, "edit")
+	if err := Bump(&Env{Root: root, Out: &bytes.Buffer{}, Errw: &bytes.Buffer{}}, "kit", BumpOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	commit(t, root, "bump kit")
+
+	pkgs, err := scanPackages(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited, err := editedInPlace(root, pkgs, "origin/main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, p := range edited {
+		got = append(got, p.Module)
+	}
+	if want := []string{"gno.land/p/moul/md/v0"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("editedInPlace = %v, want %v", got, want)
+	}
+
+	// And the chain decides whether it matters: an unpublished version is
+	// still the version to edit, so it is not a warning.
+	none, err := publishedEdits(edited, func(string) (bool, error) { return false, nil })
+	if err != nil || len(none) != 0 {
+		t.Errorf("unpublished edit should not warn: %v %v", none, err)
+	}
+	hit, err := publishedEdits(edited, func(string) (bool, error) { return true, nil })
+	if err != nil || len(hit) != 1 {
+		t.Fatalf("published edit should warn: %v %v", hit, err)
+	}
+	// The message names the command, because an author who has to look one up
+	// will instead do nothing.
+	if w := editedWarning(hit); !strings.Contains(w, "gnopm bump -if-published p/moul/md") {
+		t.Errorf("warning does not name the fix: %s", w)
+	}
+}
+
+// TestCIWarnsButDoesNotFailOnAPublishedEdit: a repository can have a good
+// reason to touch a published version, so this is the one check that reports
+// without turning the build red. Driven against a fake chain, because the test
+// suite has no network.
+func TestCIWarnsButDoesNotFailOnAPublishedEdit(t *testing.T) {
+	f := newFakeChain(t)
+	f.live["gno.land/p/moul/md/v0"] = true
+
+	root := newRepo(t)
+	addPkg(t, root, "p/moul/md", "gno.land/p/moul/md/v0", "package md\n")
+	commit(t, root, "seed")
+	mustRun(t, root, "sync")
+	commit(t, root, "lock")
+	gitCmd(t, root, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+	gitCmd(t, root, "checkout", "-q", "-b", "feature")
+	write(t, filepath.Join(root, "p/moul/md/md.gno"), "package md // edited\n")
+	commit(t, root, "edit a live version")
+
+	var out, errw bytes.Buffer
+	err := CI(&Env{Root: root, Out: &out, Errw: &errw},
+		CIOptions{RPC: f.srv.URL, ChainID: "test-1"})
+	if err != nil {
+		t.Fatalf("a warning must not fail the run: %v\n%s", err, out.String())
+	}
+	for _, want := range []string{"⚠️", publishedEditCheck, "gnopm bump -if-published"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("report is missing %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "❌") {
+		t.Errorf("nothing here is a failure:\n%s", out.String())
 	}
 }
