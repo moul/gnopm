@@ -38,26 +38,22 @@ func choosePin(root, dir, wantHash string, w io.Writer) (pinTarget, error) {
 	if err != nil {
 		return pinTarget{}, err
 	}
-	for _, ref := range []string{pinBaseRef(root)} {
-		if ref == "" {
-			break
-		}
-		commit, err := gitResolve(root, ref)
-		if err != nil {
-			continue
-		}
-		for _, cand := range candidatesOn(root, commit, dir) {
-			h, err := hashAtCommit(root, cand, dir)
-			if err != nil {
-				continue
+	// One base ref, not a list. This used to range over a slice of one and
+	// break at the end of the first iteration, with a comment explaining that
+	// further refs would be aliases of the same branch: a loop that cannot
+	// loop, which reads as though it might.
+	if ref := pinBaseRef(root); ref != "" {
+		if commit, err := gitResolve(root, ref); err == nil {
+			for _, cand := range candidatesOn(root, commit, dir) {
+				h, err := hashAtCommit(root, cand, dir)
+				if err != nil {
+					continue
+				}
+				if h == wantHash {
+					return pinTarget{Commit: cand, Ref: ref, Hash: h}, nil
+				}
 			}
-			if h == wantHash {
-				return pinTarget{Commit: cand, Ref: ref, Hash: h}, nil
-			}
 		}
-		// The base exists but holds no matching content: stop looking at
-		// further base refs, they are aliases of the same branch.
-		break
 	}
 	if w != nil {
 		fmt.Fprintf(w, "warning: %s is pinned to %s, which is not on the default branch yet.\n"+

@@ -281,3 +281,65 @@ func TestGraphRefusals(t *testing.T) {
 		})
 	}
 }
+
+// TestCollapseVersionsKeyCollision is the regression test for a package
+// silently disappearing from `gnopm graph -latest`.
+//
+// A versioned module keys on its unversioned base and a module with no version
+// keys on its own path, so gno.land/p/demo/ufmt and gno.land/p/demo/ufmt/v0
+// collided on one map key. The unversioned one was written first with rank 0,
+// v0's `0 > 0` lost, and the versioned family was redirected onto an unrelated
+// package: v0 vanished and every edge into it was redrawn onto the other node.
+//
+// Not exotic: it is what a migration looks like halfway through, the old
+// unversioned path still on chain beside the new versioned one. No existing
+// test could see it, because they all used workspaces where every path carried
+// a version.
+func TestCollapseVersionsKeyCollision(t *testing.T) {
+	g := &Graph{
+		Nodes: []GraphNode{
+			{Module: "gno.land/p/demo/ufmt", External: true},
+			{Module: "gno.land/p/demo/ufmt/v0"},
+			{Module: "gno.land/r/x/a/v0"},
+		},
+		Edges: []GraphEdge{
+			{From: "gno.land/r/x/a/v0", To: "gno.land/p/demo/ufmt/v0"},
+			{From: "gno.land/r/x/a/v0", To: "gno.land/p/demo/ufmt"},
+		},
+	}
+	collapseVersions(g)
+	sort.Slice(g.Nodes, func(i, j int) bool { return g.Nodes[i].Module < g.Nodes[j].Module })
+
+	want := []string{"gno.land/p/demo/ufmt", "gno.land/p/demo/ufmt/v0", "gno.land/r/x/a/v0"}
+	if got := modulesOf(g); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("a node was collapsed into an unrelated package:\n got %v\nwant %v", got, want)
+	}
+	wantEdges := []string{
+		"gno.land/r/x/a/v0 -> gno.land/p/demo/ufmt",
+		"gno.land/r/x/a/v0 -> gno.land/p/demo/ufmt/v0",
+	}
+	if got := edgesOf(g); strings.Join(got, ",") != strings.Join(wantEdges, ",") {
+		t.Fatalf("an edge was redrawn onto the wrong node:\n got %v\nwant %v", got, wantEdges)
+	}
+
+	// And the collapse it is supposed to do still happens: two versions of the
+	// same package become one node, with the edge on the newest.
+	g2 := &Graph{
+		Nodes: []GraphNode{
+			{Module: "gno.land/p/demo/ufmt"},
+			{Module: "gno.land/p/demo/ufmt/v0"},
+			{Module: "gno.land/p/demo/ufmt/v1"},
+		},
+		Edges: []GraphEdge{{From: "gno.land/p/demo/ufmt/v1", To: "gno.land/p/demo/ufmt/v0"}},
+	}
+	collapseVersions(g2)
+	want2 := []string{"gno.land/p/demo/ufmt", "gno.land/p/demo/ufmt/v1"}
+	got2 := modulesOf(g2)
+	sort.Strings(got2)
+	if strings.Join(got2, ",") != strings.Join(want2, ",") {
+		t.Fatalf("versions no longer collapse:\n got %v\nwant %v", got2, want2)
+	}
+	if len(g2.Edges) != 0 {
+		t.Fatalf("v1 importing v0 should collapse to nothing, got %v", edgesOf(g2))
+	}
+}
