@@ -495,6 +495,31 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+step "shell completion, sourced and driven rather than described"
+
+# Actually source the emitted script and drive bash's completion function,
+# because a completion script nobody executes is a completion script that
+# stopped working two releases ago and nobody noticed.
+compdir="$(mktemp -d)"
+ln -s "$GNOPM" "$compdir/gnopm"
+"$GNOPM" completion bash > "$compdir/gnopm.bash"
+# A real shell: gnopm on PATH, standing in the workspace, sourcing the script
+# it just emitted. Nothing here is a stand-in for the thing being tested.
+out=$(bash -c '
+  PATH="$1:$PATH"; cd "$2" || exit 1
+  source "$1/gnopm.bash"
+  COMP_WORDS=(gnopm bump ""); COMP_CWORD=2; _gnopm
+  printf "%s\n" "${COMPREPLY[@]}"
+  COMP_WORDS=(gnopm cl); COMP_CWORD=1; _gnopm
+  printf "%s\n" "${COMPREPLY[@]}"
+' _ "$compdir" "$repo")
+echo "$out" | head -12
+assert_grep "$out" "gno.land/p/demo/table/v1"
+assert_grep "$out" "clean"
+rm -rf "$compdir"
+ok "completion offers this workspace's own package names, not a static list"
+
+# ---------------------------------------------------------------------------
 step "the CI a repository needs once it uses gnopm"
 
 # The point of this file is how short it is. Everything it checks lives in the

@@ -113,7 +113,10 @@ type command struct {
 	// be applied to it. A command without them says so rather than accepting
 	// the flag and printing nothing.
 	records bool
-	run     func(*Env, *flag.FlagSet, []string) error
+	// completesModules marks a command whose positional argument is a package,
+	// so shell completion offers the workspace's module paths and directories.
+	completesModules bool
+	run              func(*Env, *flag.FlagSet, []string) error
 }
 
 var commands []*command
@@ -147,7 +150,8 @@ Run it after adding or removing a package. bump runs it for you.`,
 		},
 		{
 			name: "bump", args: "<package>",
-			short: "promote a package to its next version, in place",
+			completesModules: true,
+			short:            "promote a package to its next version, in place",
 			long: `Pins the outgoing version to a commit that still holds it, rewrites
 the module line in gnomod.toml, and leaves the directory exactly where
 it is. Then you edit the files and git diffs them properly.
@@ -180,7 +184,8 @@ opt-in that lets it decide for itself.
 		},
 		{
 			name: "unbump", args: "<package>",
-			short: "fold an unpublished version back into the one before it",
+			completesModules: true,
+			short:            "fold an unpublished version back into the one before it",
 			long: `The inverse of bump, for the bump that should not have happened.
 
 Two unpublished versions in a row is a number spent on nothing. A stack
@@ -206,8 +211,9 @@ published version cannot be redefined by folding into it either.
 		},
 		{
 			name: "ls", aliases: []string{"list"}, args: "[pattern]",
-			records: true,
-			short:   "list resolvable modules and where their source is",
+			completesModules: true,
+			records:          true,
+			short:            "list resolvable modules and where their source is",
 			long: `Lists every module in the lock. An optional pattern filters by
 substring against the module path or its directory.
 
@@ -225,8 +231,9 @@ substring against the module path or its directory.
 		},
 		{
 			name: "why", args: "<module>",
-			records: true,
-			short:   "who still imports this version",
+			completesModules: true,
+			records:          true,
+			short:            "who still imports this version",
 			long: `Lists the modules that import <module>, one per line.
 
 The question bump raises and the question tidy answers silently, so it is
@@ -253,7 +260,8 @@ empty.
 		},
 		{
 			name: "publish", aliases: []string{"deploy"}, args: "[pattern]",
-			short: "what is missing on the chain, in dependency order, as gnokey commands",
+			completesModules: true,
+			short:            "what is missing on the chain, in dependency order, as gnokey commands",
 			long: `Reads the chain the package paths point at, reports what is live,
 parked or absent there, and writes a shell script of gnokey commands for
 whatever is missing, ordered so a dependency goes up before its dependents.
@@ -393,6 +401,38 @@ knows its name.
 				fs.Bool("cache", false, "also remove the shared chain cache")
 			},
 			run: cmdClean,
+		},
+		{
+			name: "completion", args: "[bash|zsh|fish]",
+			anywhere: true,
+			short:    "print the shell completion script",
+			long: `Prints a completion script on stdout. With no argument, the shell is
+detected from $SHELL.
+
+  bash   gnopm completion bash > /etc/bash_completion.d/gnopm
+  zsh    gnopm completion zsh > "${fpath[1]}/_gnopm"
+  fish   gnopm completion fish > ~/.config/fish/completions/gnopm.fish
+
+Or, for the current shell only:
+
+  eval "$(gnopm completion bash)"
+  eval "$(gnopm completion zsh)"
+  gnopm completion fish | source
+
+All three scripts are thin: they ask the binary for candidates rather than
+carrying their own list, so a flag added today completes today. What earns
+the feature is package names, which gnopm already resolves fuzzily and a
+static script could not offer at all.`,
+			run: func(e *Env, fs *flag.FlagSet, args []string) error {
+				shell := ""
+				if len(args) > 0 {
+					shell = args[0]
+				}
+				if len(args) > 1 {
+					return fmt.Errorf("completion takes one shell, got %d", len(args))
+				}
+				return Completion(e, shell)
+			},
 		},
 		{
 			name:    "env",
@@ -642,6 +682,13 @@ func hasHelpFlag(args []string) bool {
 }
 
 func Run(args []string, out, errw io.Writer) error {
+	// Before anything else, because the words after it are the command line
+	// being typed, not this one's. Letting the flag package see them would
+	// make `gnopm __complete ls -js` fail to parse -js instead of completing
+	// it, which is exactly when completion is wanted.
+	if len(args) > 0 && args[0] == completeVerb {
+		return Complete(out, args[1:])
+	}
 	if len(args) == 0 {
 		usage(errw)
 		return nil
@@ -683,21 +730,7 @@ func Run(args []string, out, errw io.Writer) error {
 		return nil
 	}
 
-	fs := flag.NewFlagSet("gnopm "+c.name, flag.ContinueOnError)
-	fs.SetOutput(errw)
-	fs.Usage = func() { helpFor(errw, c) }
-	chdir := fs.String("C", ".", "run as if started in this directory")
-	jsonOut := fs.Bool("json", false, "machine-readable output")
-	quiet := fs.Bool("q", false, "terse output")
-	// -f is gno's name for it. -format is accepted too because that is the
-	// spelling people reach for, and one alias is cheaper than a wrong guess.
-	format := fs.String("f", "", "go-template applied to each record")
-	formatAlias := fs.String("format", "", "alias for -f")
-	verbose := fs.Bool("v", false, "say what is being checked, and where each answer came from")
-	noCache := fs.Bool("no-cache", false, "ask the chain everything, ignoring the cache")
-	if c.flags != nil {
-		c.flags(fs)
-	}
+	fs := newFlagSet(c, errw)
 	// Flags before or after the positional arguments, because insisting on one
 	// order is exactly the kind of thing that makes a CLI annoying.
 	positional, err := parseInterspersed(fs, append(globals, rest...))
@@ -708,13 +741,13 @@ func Run(args []string, out, errw io.Writer) error {
 	root := ""
 	if !c.anywhere {
 		var err error
-		if root, err = FindRoot(*chdir); err != nil {
+		if root, err = FindRoot(flagString(fs, "C")); err != nil {
 			return err
 		}
 	}
-	tmpl := *format
+	tmpl := flagString(fs, "f")
 	if tmpl == "" {
-		tmpl = *formatAlias
+		tmpl = flagString(fs, "format")
 	}
 	if tmpl != "" {
 		if !c.records {
@@ -724,15 +757,37 @@ func Run(args []string, out, errw io.Writer) error {
 		// The same refusal `gno list` makes, for the same reason: two output
 		// shapes asked for at once is a mistake, and picking one silently
 		// means a script gets the other.
-		if *jsonOut {
+		if flagBool(fs, "json") {
 			return fmt.Errorf("-f cannot be used with -json")
 		}
 	}
-	e := &Env{Root: root, Out: out, Errw: errw, JSON: *jsonOut, Quiet: *quiet, Verbose: *verbose, Format: tmpl}
-	if !*noCache {
+	e := &Env{Root: root, Out: out, Errw: errw, JSON: flagBool(fs, "json"), Quiet: flagBool(fs, "q"), Verbose: flagBool(fs, "v"), Format: tmpl}
+	if !flagBool(fs, "no-cache") {
 		e.CacheDir = cacheDir()
 	}
 	return c.run(e, fs, positional)
+}
+
+// newFlagSet registers the global options and then the command's own, so that
+// completion and Run cannot disagree about which flags exist. Two lists of the
+// same flags is how a completion script starts offering one that was removed.
+func newFlagSet(c *command, errw io.Writer) *flag.FlagSet {
+	fs := flag.NewFlagSet("gnopm "+c.name, flag.ContinueOnError)
+	fs.SetOutput(errw)
+	fs.Usage = func() { helpFor(errw, c) }
+	fs.String("C", ".", "run as if started in this directory")
+	fs.Bool("json", false, "machine-readable output")
+	fs.Bool("q", false, "terse output")
+	// -f is gno's name for it. -format is accepted too because that is the
+	// spelling people reach for, and one alias is cheaper than a wrong guess.
+	fs.String("f", "", "go-template applied to each record")
+	fs.String("format", "", "alias for -f")
+	fs.Bool("v", false, "say what is being checked, and where each answer came from")
+	fs.Bool("no-cache", false, "ask the chain everything, ignoring the cache")
+	if c.flags != nil {
+		c.flags(fs)
+	}
+	return fs
 }
 
 // parseInterspersed parses flags that appear anywhere in args and returns the

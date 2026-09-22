@@ -194,6 +194,21 @@ GNOPM_CACHE=off gnopm …   # the same, for a whole shell; or point it elsewhere
 gnopm env                 # where the cache is, among everything else gnopm worked out
 ```
 
+## Completion
+
+```sh
+gnopm completion bash > /etc/bash_completion.d/gnopm
+gnopm completion zsh  > "${fpath[1]}/_gnopm"
+gnopm completion fish > ~/.config/fish/completions/gnopm.fish
+gnopm completion                 # detects the shell from $SHELL
+```
+
+What earns it is not the command names, it is **package names**: `gnopm bump
+md<TAB>` completes out of this workspace's lock, pinned versions included, with
+each candidate described by where its source actually is. A static script could
+not offer that at all, so all three scripts are thin and ask the binary, which
+also means a flag added today completes today.
+
 Full command reference: `gnopm help <command>`, or
 **[moul.github.io/gnopm](https://moul.github.io/gnopm/)**.
 
