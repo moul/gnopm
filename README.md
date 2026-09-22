@@ -49,6 +49,7 @@ gnopm sync        # make the state good
 gnopm bump md     # promote a package, in place; then edit the files
 gnopm unbump md   # take a number back, while nothing has published it
 gnopm ls          # every module and where its source is
+gnopm why md/v0   # who still imports this version
 gnopm verify      # prove every pinned version still reproduces (for CI)
 gnopm tidy        # make the whole workspace right, chain included
 gnopm publish     # what is missing on chain, as gnokey commands you can read
@@ -65,7 +66,14 @@ standing in. Data goes to stdout and nothing else does, so it pipes:
 ```sh
 gnopm ls -q | xargs -n1 gno lint
 gnopm status -json | jq -e .ok
+gnopm why p/alice/md/v0 -q | wc -l
 ```
+
+`why` is the question `bump` raises and the one `tidy` answers silently: before
+dropping a pinned version, what would stop resolving? It searches the
+materialized assembly as well as the working tree, because a superseded version
+importing an older one is how a chain of versions stays alive, and that
+importer has no directory for grep to find.
 
 ## A version number is a tag, not a counter
 

@@ -212,6 +212,32 @@ substring against the module path or its directory.
 			run: cmdLs,
 		},
 		{
+			name: "why", args: "<module>",
+			short: "who still imports this version",
+			long: `Lists the modules that import <module>, one per line.
+
+The question bump raises and the question tidy answers silently, so it is
+worth being able to ask directly: before dropping a pinned version you
+want to know what would stop resolving.
+
+<module> is a module path, a directory, or any unambiguous part of one.
+With no argument, the package the working directory is in. It is resolved
+against the lock rather than against the tree, so a version that no longer
+has a directory can still be asked about.
+
+Both halves of the workspace are searched: the working tree and the
+materialized assembly. A superseded version importing an older one is how
+a chain of versions stays alive, and a graph built from the tree alone
+would report that older version as unused.
+
+Silent on stdout when nothing imports it, so an empty answer pipes as
+empty.
+
+  -q      importer paths only, one per line
+  -json   the module and its importers`,
+			run: cmdWhy,
+		},
+		{
 			name: "publish", aliases: []string{"deploy"}, args: "[pattern]",
 			short: "what is missing on the chain, in dependency order, as gnokey commands",
 			long: `Reads the chain the package paths point at, reports what is live,

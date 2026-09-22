@@ -2,8 +2,6 @@ package gnopm
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -45,49 +43,15 @@ var (
 // superseded version importing an older one is exactly how a chain of versions
 // stays alive.
 func workspaceImports(root string) (map[string]bool, error) {
-	out := map[string]bool{}
-	scan := func(dir string) error {
-		return filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
-			if err != nil {
-				return nil // a missing assembly is not an error here
-			}
-			if d.IsDir() {
-				if p != dir && (strings.HasPrefix(d.Name(), ".") && d.Name() != assemblyDir) {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if !strings.HasSuffix(d.Name(), ".gno") {
-				return nil
-			}
-			b, err := os.ReadFile(p)
-			if err != nil {
-				return err
-			}
-			self := ""
-			if mod, _, err := readGnomod(filepath.Join(filepath.Dir(p), "gnomod.toml")); err == nil {
-				self = mod
-			}
-			for _, imp := range importsOf(b) {
-				if imp == self {
-					continue // a package naming itself is not a dependency
-				}
-				out[imp] = true
-			}
-			return nil
-		})
-	}
-	pkgs, err := scanPackages(root)
+	graph, err := importGraph(root)
 	if err != nil {
 		return nil, err
 	}
-	for _, pk := range pkgs {
-		if err := scan(filepath.Join(root, filepath.FromSlash(pk.Dir))); err != nil {
-			return nil, err
+	out := map[string]bool{}
+	for _, tos := range graph {
+		for _, to := range tos {
+			out[to] = true
 		}
-	}
-	if err := scan(filepath.Join(root, assemblyDir)); err != nil {
-		return nil, err
 	}
 	return out, nil
 }
