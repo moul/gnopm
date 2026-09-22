@@ -355,6 +355,42 @@ version you are about to publish.
 			run: cmdPublish,
 		},
 		{
+			name:  "merge-lock",
+			short: "resolve a conflicted gnomod.lock, then sync",
+			long: `Squash-merging a base branch makes every stacked branch conflict on
+gnomod.lock, and taking a side loses pins silently. --ours drops whatever
+the base added that this branch never had an entry for; sync does not
+restore it, because it carries over entries the old lock already had and
+these were never in it; and verify then passes, because a lock that never
+mentions a version is consistent, just poorer. Whatever imported those
+versions stops resolving later, somewhere else.
+
+The rule needs no judgement, which is why it belongs in the tool:
+
+  both sides identical               either
+  only one side has the module       that side
+  { dir } against { commit, hash }   the pinned one
+
+The third row follows from what a pin means: the side that pinned a
+version is the side that bumped past it, so that version has to stay
+resolvable from history.
+
+It reads the merge stages out of the index rather than parsing conflict
+markers, writes the union, ` + "`git add`" + `s it, and syncs. It refuses, naming
+both commits, when one module is pinned to two different commits, which
+is the one genuinely ambiguous case and is not what a squash merge
+produces.
+
+It says what it took from each side. The failure mode here is a pin
+disappearing without anyone noticing, so silence is the wrong default.
+
+  -n   print the resolution and change nothing`,
+			flags: func(fs *flag.FlagSet) {
+				fs.Bool("n", false, "print the resolution and change nothing")
+			},
+			run: cmdMergeLock,
+		},
+		{
 			name: "verify", aliases: []string{"check"},
 			short: "prove every pinned version still reproduces (the CI guard)",
 			long: `Writes nothing, exits non-zero with what to run.

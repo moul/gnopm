@@ -56,6 +56,7 @@ gnopm verify      # prove every pinned version still reproduces (for CI)
 gnopm tidy        # make the whole workspace right, chain included
 gnopm publish     # what is missing on chain, as gnokey commands you can read
 gnopm graph       # the dependency graph, as graphviz DOT
+gnopm merge-lock  # resolve a conflicted gnomod.lock, mechanically
 gnopm clean       # drop the assembly; sync rebuilds it
 ```
 
@@ -257,6 +258,25 @@ the old one resolvable. It changes only on add, remove or bump.
 
 Named after the manifest rather than the tool, at the workspace root only, as
 every ecosystem does it.
+
+**A conflicted lock resolves mechanically**, so `gnopm merge-lock` does it.
+Squash-merging a base branch makes every stacked branch conflict here, and
+taking a side loses pins silently: `--ours` drops whatever the base added that
+this branch never had an entry for, `sync` cannot restore it because it only
+carries over entries the old lock already had, and `verify` then passes, because
+a lock that never mentions a version is consistent, just poorer.
+
+```sh
+gnopm merge-lock -n    # the resolution, changing nothing
+gnopm merge-lock       # write it, git add it, sync
+```
+
+Identical wins, one-sided wins, and `{ dir }` against `{ commit, hash }` takes
+the pinned one, because the side that pinned a version is the side that bumped
+past it. It reads the merge stages out of the index rather than parsing conflict
+markers, names what it took from each side, and refuses when one module is
+pinned to two different commits, which is the one ambiguous case and is not what
+a squash merge produces.
 
 **Pins go to a commit already on the default branch.** Most repositories
 squash-merge, so a pin to a branch commit stops resolving once the change
