@@ -227,11 +227,8 @@ func Imports(dir, domain string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		for _, line := range strings.Split(string(b), "\n") {
-			p, ok := importOnLine(line, domain)
-			if ok {
-				seen[p] = true
-			}
+		for _, p := range importsIn(string(b), domain) {
+			seen[p] = true
 		}
 	}
 	out := make([]string, 0, len(seen))
@@ -242,9 +239,123 @@ func Imports(dir, domain string) ([]string, error) {
 	return out, nil
 }
 
-// importOnLine pulls a domain-prefixed import out of one source line. It is
-// deliberately textual: gnopm does not parse gno, and an import inside a
-// comment costing one extra chain read is cheaper than a parser to avoid it.
+// importsIn pulls the domain-prefixed imports out of one source file, reading
+// only the import declaration.
+//
+// This used to match a quoted domain-prefixed string ANYWHERE in the file, on
+// the reasoning that gnopm does not parse gno and an import inside a comment
+// costs one extra chain read. That reasoning was wrong about the cost. A path
+// that is neither live nor in the workspace does not cost a read, it BLOCKS
+// the package and everything importing it, with a message naming a dependency
+// the package does not have:
+//
+//   - gno-contracts#201: a doc comment in p/moul/kit/ui named a realm path
+//     that deversioning had removed, and kit/ui became unpublishable on every
+//     chain.
+//   - Measured again 2026-09-22 on the same repo, this time from ordinary
+//     code and not a comment: strings.TrimPrefix(p, "gno.land/") made
+//     "gno.land/" a dependency, and a prefix constant
+//     "gno.land/r/moul/config/v" made that a dependency too. Two packages
+//     blocked, and `publish` refused to emit a script for the other 53.
+//
+// So the scan is still textual, but it is bounded by the grammar instead of by
+// the file: gno puts the import declaration between the package clause and the
+// first other declaration, and nothing after that is an import. Comment lines
+// inside the block are skipped, which is the #201 case.
+func importsIn(src, domain string) []string {
+	var (
+		out       []string
+		afterPkg  bool
+		inBlock   bool
+		inComment bool
+	)
+	for _, line := range strings.Split(src, "\n") {
+		s := strings.TrimSpace(line)
+
+		// A /* */ comment can hold anything, including the word import.
+		if inComment {
+			if i := strings.Index(s, "*/"); i >= 0 {
+				inComment = false
+				s = strings.TrimSpace(s[i+2:])
+			} else {
+				continue
+			}
+		}
+		if i := strings.Index(s, "/*"); i >= 0 && !strings.Contains(s[:i], `"`) {
+			if j := strings.Index(s[i:], "*/"); j < 0 {
+				inComment = true
+			}
+			s = strings.TrimSpace(s[:i])
+		}
+		if s == "" || strings.HasPrefix(s, "//") {
+			continue
+		}
+
+		if !afterPkg {
+			// Everything before `package x` is the file's doc comment.
+			if strings.HasPrefix(s, "package ") {
+				afterPkg = true
+			}
+			continue
+		}
+
+		if inBlock {
+			if strings.HasPrefix(s, ")") {
+				inBlock = false
+				// An import declaration can be followed by another one.
+				continue
+			}
+			if p, ok := importOnLine(s, domain); ok {
+				out = append(out, p)
+			}
+			// gofmt would not write `"path")`, but a block that never closes
+			// would make the rest of the file look like imports again, which
+			// is the bug this function exists to remove.
+			if strings.HasSuffix(s, ")") {
+				inBlock = false
+			}
+			continue
+		}
+
+		switch {
+		case strings.HasPrefix(s, "import ("):
+			inBlock = true
+			// A whole block on one line, `import ( "a"; "b" )`, is legal and
+			// closes where it opened.
+			if rest := strings.TrimSpace(s[len("import ("):]); strings.HasSuffix(rest, ")") {
+				inBlock = false
+				out = append(out, quotedPaths(rest, domain)...)
+			}
+		case strings.HasPrefix(s, "import "):
+			if p, ok := importOnLine(s, domain); ok {
+				out = append(out, p)
+			}
+		default:
+			// The first declaration that is not an import ends the header,
+			// and with it anything that can be one.
+			return out
+		}
+	}
+	return out
+}
+
+// quotedPaths pulls every domain-prefixed quoted path out of one line, for the
+// one-line import block where several can share it.
+func quotedPaths(line, domain string) []string {
+	var out []string
+	for {
+		p, ok := importOnLine(line, domain)
+		if !ok {
+			return out
+		}
+		out = append(out, p)
+		i := strings.Index(line, `"`+p+`"`)
+		line = line[i+len(p)+2:]
+	}
+}
+
+// importOnLine pulls a domain-prefixed import out of one line of an import
+// declaration.
 func importOnLine(line, domain string) (string, bool) {
 	needle := `"` + domain + `/`
 	i := strings.Index(line, needle)

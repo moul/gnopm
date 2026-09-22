@@ -396,3 +396,98 @@ func TestPublishKeysOffWhatThePatternNamed(t *testing.T) {
 		t.Fatalf("key was guessed from a pulled-in dependency, not from what was named:\n%s", report)
 	}
 }
+
+// TestImportsInReadsOnlyTheImportDeclaration pins the bug that made
+// `publish` refuse to emit a script at all: a quoted package path in ordinary
+// code or in a doc comment was read as a dependency, and a dependency that is
+// neither live nor in the workspace blocks the package and every importer of
+// it (gno-contracts#201, and two more found 2026-09-22).
+func TestImportsInReadsOnlyTheImportDeclaration(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		src  string
+		want []string
+	}{
+		{
+			"a plain block",
+			"package x\n\nimport (\n\t\"gno.land/p/nt/avl/v0\"\n\t\"strings\"\n)\n",
+			[]string{"gno.land/p/nt/avl/v0"},
+		},
+		{
+			"an aliased and a single-line import",
+			"package x\n\nimport ns \"gno.land/r/a/ns/v0\"\n",
+			[]string{"gno.land/r/a/ns/v0"},
+		},
+		{
+			"a doc comment above the package clause",
+			"// Usage:\n//\n//\ts.Realm(\"gno.land/r/moul/config\")\npackage x\n\nimport \"gno.land/p/nt/avl/v0\"\n",
+			[]string{"gno.land/p/nt/avl/v0"},
+		},
+		{
+			"a doc comment on a function, the kit/ui case",
+			"package x\n\nimport \"strings\"\n\n// ActionIn links into gno.land/r/moul/home/v0, which is:\n//\n//\t\"gno.land/r/moul/home/v0\"\nfunc F() {}\n",
+			nil,
+		},
+		{
+			"a bare domain in ordinary code",
+			"package x\n\nimport \"strings\"\n\nfunc F(p string) string { return strings.TrimPrefix(p, \"gno.land/\") }\n",
+			nil,
+		},
+		{
+			"a prefix constant that is not a package path",
+			"package x\n\nconst want = \"gno.land/r/moul/config/v\"\n",
+			nil,
+		},
+		{
+			"a realm naming itself in a constant",
+			"package x\n\nconst realmPath = \"gno.land/r/moul/home\"\n",
+			nil,
+		},
+		{
+			"a comment line inside the block",
+			"package x\n\nimport (\n\t// see \"gno.land/r/ghost/v0\"\n\t\"gno.land/p/nt/avl/v0\"\n)\n",
+			[]string{"gno.land/p/nt/avl/v0"},
+		},
+		{
+			"a block comment before the package clause",
+			"/*\nimport (\n\t\"gno.land/r/ghost/v0\"\n)\n*/\npackage x\n\nimport \"gno.land/p/nt/avl/v0\"\n",
+			[]string{"gno.land/p/nt/avl/v0"},
+		},
+		{
+			"two import declarations",
+			"package x\n\nimport \"gno.land/p/a/v0\"\n\nimport (\n\t\"gno.land/p/b/v0\"\n)\n",
+			[]string{"gno.land/p/a/v0", "gno.land/p/b/v0"},
+		},
+	} {
+		got := importsIn(tc.src, "gno.land")
+		if len(got) != len(tc.want) {
+			t.Errorf("%s: importsIn = %q, want %q", tc.name, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("%s: importsIn = %q, want %q", tc.name, got, tc.want)
+				break
+			}
+		}
+	}
+}
+
+// TestImportsInClosesTheBlock covers the shapes gofmt does not write but the
+// grammar allows. A block that never closes would put the scanner back to
+// reading the whole file, which is the failure mode this replaced.
+func TestImportsInClosesTheBlock(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		src  string
+		want int
+	}{
+		{"one-line block", "package x\n\nimport ( \"gno.land/p/a/v0\"; \"gno.land/p/b/v0\" )\n\nconst c = \"gno.land/r/ghost/v0\"\n", 2},
+		{"empty one-line block", "package x\n\nimport ()\n\nconst c = \"gno.land/r/ghost/v0\"\n", 0},
+		{"closing paren on the last import", "package x\n\nimport (\n\t\"gno.land/p/a/v0\")\n\nconst c = \"gno.land/r/ghost/v0\"\n", 1},
+	} {
+		if got := importsIn(tc.src, "gno.land"); len(got) != tc.want {
+			t.Errorf("%s: importsIn = %q, want %d path(s)", tc.name, got, tc.want)
+		}
+	}
+}
