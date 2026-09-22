@@ -35,7 +35,7 @@ func buildVersion() (version, revision string, dirty bool) {
 	return version, revision, dirty
 }
 
-// env is what every command gets: where the workspace is, where to write data,
+// Env is what every command gets: where the workspace is, where to write data,
 // and where to write everything that is not data.
 //
 // The split is the whole reason `gnopm ls -q | xargs ...` works. Data goes to
