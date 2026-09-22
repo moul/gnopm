@@ -29,7 +29,7 @@ lint:
 	else \
 		echo "staticcheck not on PATH, skipping it."; \
 		echo "  go install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)"; \
-		echo "  (needs a Go at least as new as the one it was built with; CI pins both)"; \
+		echo "  (needs a Go from the same release line it was built with; CI pins both)"; \
 	fi
 
 # The integration test is also the demo repository, deliberately the same
