@@ -32,6 +32,9 @@ type fakeChain struct {
 	// down makes every query fail at the transport, the case that must never
 	// be mistaken for "absent".
 	down bool
+	// noAccount answers auth/accounts with an empty object, which is what a
+	// chain says about an address that has never received funds.
+	noAccount bool
 
 	// mu guards calls, and live/parked against the concurrent reads Warm
 	// makes. Serial probing needed none of this; a batch does.
@@ -71,6 +74,17 @@ func newFakeChain(t *testing.T) *fakeChain {
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		switch {
+		case strings.HasPrefix(req.Params.Path, "auth/accounts/"):
+			addr := strings.TrimPrefix(req.Params.Path, "auth/accounts/")
+			if f.noAccount {
+				writeABCIData(w, `{}`)
+				return
+			}
+			writeABCIData(w, fmt.Sprintf(
+				`{"BaseAccount":{"address":%q,"coins":"1000000ugnot","public_key":null,"account_number":"7","sequence":"42"}}`, addr))
 			return
 		}
 		switch req.Params.Path {
