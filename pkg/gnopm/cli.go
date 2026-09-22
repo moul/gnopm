@@ -51,6 +51,10 @@ type Env struct {
 	Errw io.Writer
 	// JSON and Quiet select the output shape.
 	JSON, Quiet bool
+	// Format is the -f go-template, applied once per record. Same flag name
+	// and same semantics as `gno list -f`: a second spelling of an idea the
+	// toolchain already has is worse than not having it.
+	Format string
 	// Verbose says what is being checked, and where each answer came from.
 	// Everything it writes goes to Errw, so -v never reaches the pipe.
 	Verbose bool
@@ -105,7 +109,11 @@ type command struct {
 	// version` failing with "gnowork.toml not found" is absurd, and it is the
 	// first thing anyone runs after installing.
 	anywhere bool
-	run      func(*Env, *flag.FlagSet, []string) error
+	// records marks a command whose output is a sequence of values, so -f can
+	// be applied to it. A command without them says so rather than accepting
+	// the flag and printing nothing.
+	records bool
+	run     func(*Env, *flag.FlagSet, []string) error
 }
 
 var commands []*command
@@ -114,7 +122,8 @@ func init() {
 	commands = []*command{
 		{
 			name: "status", aliases: []string{"st"},
-			short: "show what the workspace resolves, and whether anything is out of date",
+			records: true,
+			short:   "show what the workspace resolves, and whether anything is out of date",
 			long: `Reports how many modules the workspace can resolve, where they come
 from, and whether the lock and the assembly are current.
 
@@ -197,12 +206,15 @@ published version cannot be redefined by folding into it either.
 		},
 		{
 			name: "ls", aliases: []string{"list"}, args: "[pattern]",
-			short: "list resolvable modules and where their source is",
+			records: true,
+			short:   "list resolvable modules and where their source is",
 			long: `Lists every module in the lock. An optional pattern filters by
 substring against the module path or its directory.
 
   -q       module paths only, one per line, for piping
   -json    full records as JSON
+  -f       go-template over each record, as ` + "`gno list -f`" + ` does:
+           {{.Module}} {{.Source}} {{.Dir}} {{.Commit}} {{.Hash}}
   -pinned  only versions materialized from history
   -tree    only versions in the working tree`,
 			flags: func(fs *flag.FlagSet) {
@@ -213,7 +225,8 @@ substring against the module path or its directory.
 		},
 		{
 			name: "why", args: "<module>",
-			short: "who still imports this version",
+			records: true,
+			short:   "who still imports this version",
 			long: `Lists the modules that import <module>, one per line.
 
 The question bump raises and the question tidy answers silently, so it is
@@ -234,7 +247,8 @@ Silent on stdout when nothing imports it, so an empty answer pipes as
 empty.
 
   -q      importer paths only, one per line
-  -json   the module and its importers`,
+  -json   the module and its importers
+  -f      go-template over each importer: {{.Importer}} {{.Module}}`,
 			run: cmdWhy,
 		},
 		{
@@ -381,8 +395,9 @@ knows its name.
 			run: cmdClean,
 		},
 		{
-			name:  "env",
-			short: "show what gnopm worked out about this workspace",
+			name:    "env",
+			records: true,
+			short:   "show what gnopm worked out about this workspace",
 			long: `Everything gnopm detected rather than was told: the workspace root,
 the lock, the assembly, the upstream ref verify checks against, and the
 gno home it caches beside.
@@ -394,6 +409,7 @@ with.`,
 		{
 			name:     "version",
 			anywhere: true,
+			records:  true,
 			short:    "print the gnopm version",
 			run:      func(e *Env, fs *flag.FlagSet, args []string) error { return cmdVersion(e) },
 		},
@@ -490,6 +506,7 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, "  -C <dir>   run as if started in <dir>\n")
 	fmt.Fprint(w, "  -q         terse output, module paths only where that makes sense\n")
 	fmt.Fprint(w, "  -json      machine-readable output\n")
+	fmt.Fprint(w, "  -f <tmpl>  go-template over each record, as `gno list -f` does\n")
 	fmt.Fprint(w, "  -v         say what is being checked, and where each answer came from\n")
 	fmt.Fprint(w, "  -no-cache  ask the chain everything, ignoring ~/.gnopm\n")
 	fmt.Fprint(w, "\n`gnopm help <command>` for detail. Start with `gnopm status`.\n")
@@ -582,11 +599,17 @@ func hoistGlobals(args []string) (name string, globals, rest []string, err error
 			}
 			globals = append(globals, a, args[i+1])
 			i += 2
+		case "f", "format":
+			if i+1 >= len(args) {
+				return "", nil, nil, fmt.Errorf("-%s needs a template", opt)
+			}
+			globals = append(globals, a, args[i+1])
+			i += 2
 		case "q", "json", "v", "no-cache":
 			globals = append(globals, a)
 			i++
 		default:
-			return "", nil, nil, fmt.Errorf("%q is not a global option. -C, -q and -json go anywhere; every other option goes after the command name", a)
+			return "", nil, nil, fmt.Errorf("%q is not a global option. -C, -q, -json and -f go anywhere; every other option goes after the command name", a)
 		}
 	}
 	if i >= len(args) {
@@ -655,6 +678,10 @@ func Run(args []string, out, errw io.Writer) error {
 	chdir := fs.String("C", ".", "run as if started in this directory")
 	jsonOut := fs.Bool("json", false, "machine-readable output")
 	quiet := fs.Bool("q", false, "terse output")
+	// -f is gno's name for it. -format is accepted too because that is the
+	// spelling people reach for, and one alias is cheaper than a wrong guess.
+	format := fs.String("f", "", "go-template applied to each record")
+	formatAlias := fs.String("format", "", "alias for -f")
 	verbose := fs.Bool("v", false, "say what is being checked, and where each answer came from")
 	noCache := fs.Bool("no-cache", false, "ask the chain everything, ignoring the cache")
 	if c.flags != nil {
@@ -674,7 +701,23 @@ func Run(args []string, out, errw io.Writer) error {
 			return err
 		}
 	}
-	e := &Env{Root: root, Out: out, Errw: errw, JSON: *jsonOut, Quiet: *quiet, Verbose: *verbose}
+	tmpl := *format
+	if tmpl == "" {
+		tmpl = *formatAlias
+	}
+	if tmpl != "" {
+		if !c.records {
+			return fmt.Errorf("`gnopm %s` has no records to template, so -f means nothing here.\n"+
+				"  -f works on the commands that also take -json: ls, why, status, env, version", c.name)
+		}
+		// The same refusal `gno list` makes, for the same reason: two output
+		// shapes asked for at once is a mistake, and picking one silently
+		// means a script gets the other.
+		if *jsonOut {
+			return fmt.Errorf("-f cannot be used with -json")
+		}
+	}
+	e := &Env{Root: root, Out: out, Errw: errw, JSON: *jsonOut, Quiet: *quiet, Verbose: *verbose, Format: tmpl}
 	if !*noCache {
 		e.CacheDir = cacheDir()
 	}

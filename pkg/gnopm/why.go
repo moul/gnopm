@@ -37,6 +37,16 @@ func Why(e *Env, target string) error {
 		}
 		return e.writeJSON(map[string]any{"module": module, "importers": users})
 	}
+	if e.Format != "" {
+		// One record per importer, not one record holding a list: -f is a
+		// line-per-record shape, so a template over a slice would make every
+		// caller write a range action to get the obvious thing.
+		vals := make([]any, len(users))
+		for i, u := range users {
+			vals[i] = WhyRecord{Importer: u, Module: module}
+		}
+		return e.emit(vals...)
+	}
 	if len(users) == 0 {
 		// Nothing on stdout: an empty answer has to pipe as empty. The
 		// explanation is a diagnostic and goes where diagnostics go.

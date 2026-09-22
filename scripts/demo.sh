@@ -422,6 +422,11 @@ echo "--- gnopm status -json ---"
 gnopm status -json
 echo "--- gnopm ls -pinned -json ---"
 gnopm ls -pinned -json
+echo "--- gnopm ls -f (a go-template, as gno list -f does) ---"
+gnopm ls -f '{{.Module}}	{{.Source}}'
+
+out=$(gnopm ls -pinned -f '{{.Module}} {{.Commit}}' 2>&1)
+assert_grep "$out" "gno.land/p/demo/table/v0"
 
 out=$(gnopm status -json 2>&1)
 grep -q '"ok": true' <<<"$out" || fail "status should report ok"

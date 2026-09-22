@@ -70,7 +70,14 @@ standing in. Data goes to stdout and nothing else does, so it pipes:
 gnopm ls -q | xargs -n1 gno lint
 gnopm status -json | jq -e .ok
 gnopm why p/alice/md/v0 -q | wc -l
+gnopm ls -f '{{.Module}} {{.Commit}}'   # a go-template, as `gno list -f` does
 ```
+
+`-f` takes gno's flag name and gno's semantics on purpose: one template per
+record, a newline after each, and refusing to be combined with `-json`. It
+works on every command that takes `-json`, and the struct a template names is
+the struct the JSON carries, so a field cannot exist in one view and not the
+other.
 
 `why` is the question `bump` raises and the one `tidy` answers silently: before
 dropping a pinned version, what would stop resolving? It searches the
