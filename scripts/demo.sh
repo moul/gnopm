@@ -396,6 +396,13 @@ grep -q 'gno.land/p/demo/table/v0' "$repo/r/demo/board/board.gno" \
   || fail "board should still pin table/v0"
 ok "r/demo/board still pins table/v0 and nothing broke"
 
+# And gnopm can answer that without grep, which is the point of `why`: the
+# answer has to include importers that live only under .gnopm/, where a grep
+# over the working tree cannot see them.
+echo "--- gnopm why gno.land/p/demo/table/v0 ---"
+out=$(gnopm why gno.land/p/demo/table/v0 2>&1); echo "$out"
+assert_grep "$out" "gno.land/r/demo/board/v0"
+
 # ---------------------------------------------------------------------------
 step "skipping versions, and bumping something with an external dependency"
 
