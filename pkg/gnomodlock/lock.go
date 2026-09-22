@@ -97,7 +97,7 @@ func (s Source) Variant() string {
 // has to be materialized for it to resolve.
 func (s Source) InTree() bool { return s.Variant() == "dir" }
 
-// validate rejects a source that is not exactly one well-formed variant.
+// Validate rejects a source that is not exactly one well-formed variant.
 func (s Source) Validate() error {
 	switch s.Variant() {
 	case "dir":
@@ -125,7 +125,7 @@ func (l *Lock) Sort() {
 	sort.Slice(l.Modules, func(i, j int) bool { return l.Modules[i].Module < l.Modules[j].Module })
 }
 
-// byModule indexes entries by module path, and reports the first duplicate.
+// ByModule indexes entries by module path, and reports the first duplicate.
 func (l *Lock) ByModule() (map[string]*LockEntry, error) {
 	out := make(map[string]*LockEntry, len(l.Modules))
 	for i := range l.Modules {
@@ -178,12 +178,12 @@ func (s Source) inlineTable() string {
 	return "{ " + strings.Join(kv, ", ") + " }"
 }
 
-// writeLock writes the lock to the repository root, creating it if absent.
+// Write writes the lock to the repository root, creating it if absent.
 func Write(root string, l *Lock) error {
 	return os.WriteFile(filepath.Join(root, LockFile), []byte(l.String()), 0o644)
 }
 
-// readLock parses the lock at the repository root. A missing lock is an empty
+// Read parses the lock at the repository root. A missing lock is an empty
 // lock, not an error: that is a workspace that has not been locked yet.
 func Read(root string) (*Lock, error) {
 	b, err := os.ReadFile(filepath.Join(root, LockFile))

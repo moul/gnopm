@@ -10,7 +10,7 @@ import (
 	"text/tabwriter"
 )
 
-// cmdStatus answers "what is the state of this workspace", in three lines.
+// Status answers "what is the state of this workspace", in three lines.
 //
 // Read-only on purpose. A status command that silently repaired things would
 // make it impossible to ask the question, and the answer always names the
@@ -146,7 +146,7 @@ func cmdLs(e *Env, fs *flag.FlagSet, args []string) error {
 	return w.Flush()
 }
 
-// cmdSync is the lazy one: work out what is out of date and fix it.
+// Sync is the lazy one: work out what is out of date and fix it.
 //
 // Everything else is a special case of this, which is why it is the command
 // a Makefile prerequisite or a shell hook should call. Quiet when there is

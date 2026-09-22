@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// install materializes every locked version that is not in the working tree
+// Install materializes every locked version that is not in the working tree
 // into .gnopm/, and prunes whatever the lock no longer mentions.
 //
 // The assembly mirrors the module path (.gnopm/gno.land/p/moul/md/v0), which
@@ -234,7 +234,7 @@ func pruneAssembly(asm string, want []LockEntry) (int, error) {
 	return len(drop), nil
 }
 
-// verify is the CI guard. It writes nothing, and proves three things:
+// Verify is the CI guard. It writes nothing, and proves three things:
 //
 //  1. gnomod.lock is in canonical form, so a hand edit or a stale generator
 //     is caught before it becomes a merge conflict;
@@ -249,7 +249,7 @@ func pruneAssembly(asm string, want []LockEntry) (int, error) {
 // so the rule is consistency rather than identity.
 func Verify(e *Env) error { return VerifyWith(e, "") }
 
-// verifyWith is verify, optionally also requiring every pinned commit to be
+// VerifyWith is Verify, optionally also requiring every pinned commit to be
 // reachable from upstream.
 //
 // That extra check belongs to pull requests, not to the default. A pin to a

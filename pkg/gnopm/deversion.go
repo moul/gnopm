@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// deversion is the one-time migration from version-in-the-directory to
+// Deversion is the one-time migration from version-in-the-directory to
 // version-in-the-module-line, for a whole workspace at once.
 //
 // It is a gnopm command rather than a throwaway script because every gno

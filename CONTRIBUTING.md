@@ -5,12 +5,20 @@ The authoritative guide. [`AGENTS.md`](./AGENTS.md) and [`CLAUDE.md`](./CLAUDE.m
 ## Setup
 
 ```sh
-go test ./...          # everything, including the integration test
-go run . help
+make              # what CI runs: lint, test, demo
+make test         # the tests alone, including the integration test
+make run ARGS="status -json"
+make install      # put gnopm on your PATH
 ```
 
+Plain `go test ./...` and `go run . help` work too; the Makefile exists so that
+the checks here and the checks in CI cannot drift apart.
+
 No network, no gno toolchain, no dependencies. The integration test builds its
-own git repository in a temporary directory.
+own git repository in a temporary directory. `make lint` runs `gofmt` and
+`go vet` always, and `staticcheck` when it is on your PATH, printing how to get
+it when it is not: keeping that optional is what preserves the no-network
+promise, and CI is where it is pinned and enforced.
 
 `gno` on `PATH` is optional: when present, `scripts/demo.sh` also lints and
 tests the workspace it generates, the only check that the generated gno code
@@ -19,11 +27,13 @@ compiles.
 ## Layout
 
 ```
+Makefile                the checks, so they cannot drift from CI's
 main.go                 entry point only, no logic
 pkg/gnopm/              the operations: Sync, Bump, Unbump, Verify, Tidy, Deversion, CI
 pkg/gnomodlock/         the gnomod.lock format, independent of the CLI
 scripts/demo.sh         the integration test, which is also the demo
 scripts/screenshots.sh  regenerates docs/img/ from real output
+staticcheck.conf        which checks are on, and why one is off
 docs/                   the site at moul.github.io/gnopm
 ```
 
@@ -138,7 +148,7 @@ renames, that a version with no directory still materializes byte-for-byte,
 that a pin lands on a commit which survives a squash merge.
 
 ```sh
-go test ./... && go vet ./... && gofmt -l .   # the last must print nothing
+make          # go test, go vet, gofmt, staticcheck, and the demo
 ```
 
 ## Docs, screenshots, demo
@@ -165,7 +175,7 @@ Part of a change, not follow-up work.
 
 ## Done means
 
-1. `go test ./...`, `go vet ./...`, `gofmt -l .` clean.
+1. `make` clean: tests, `go vet`, `gofmt`, `staticcheck`, and the demo.
 2. A regression test exists if this was a bug.
 3. README updated if behaviour changed; screenshots rerun if output changed.
 4. The pull request says what was decided and why.

@@ -107,7 +107,7 @@ func Parse(s string) (*Lock, error) {
 	return l, nil
 }
 
-// splitKV splits `key = value` on the first `=`.
+// SplitKV splits `key = value` on the first `=`.
 func SplitKV(line string) (key, val string, ok bool) {
 	i := strings.Index(line, "=")
 	if i < 0 {

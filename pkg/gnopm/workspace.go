@@ -52,7 +52,7 @@ type Package struct {
 	Ignored bool
 }
 
-// findRoot walks up from dir to the workspace root.
+// FindRoot walks up from dir to the workspace root.
 func FindRoot(dir string) (string, error) {
 	d, err := filepath.Abs(dir)
 	if err != nil {

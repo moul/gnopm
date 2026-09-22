@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// bump promotes a package to its next major version without copying it.
+// Bump promotes a package to its next major version without copying it.
 //
 // The old way, and the reason this tool exists, was to copy p/moul/md/v0 to
 // p/moul/md/v1 and edit the copy. git pairs nothing across that, so the review
