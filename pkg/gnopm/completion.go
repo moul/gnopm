@@ -181,15 +181,15 @@ func commandCandidates() []candidate {
 	return out
 }
 
+// globalFlagCandidates reads the same list the usage text and the parser do, so
+// a global option cannot exist in one of the three and not the others.
 func globalFlagCandidates() []candidate {
-	return []candidate{
-		{"-C", "run as if started in this directory"},
-		{"-f", "go-template applied to each record"},
-		{"-json", "machine-readable output"},
-		{"-no-cache", "ask the chain everything, ignoring the cache"},
-		{"-q", "terse output"},
-		{"-v", "say what is being checked, and where each answer came from"},
+	out := make([]candidate, 0, len(globalOptions))
+	for _, g := range globalOptions {
+		out = append(out, candidate{"-" + g.name, g.help})
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].value < out[j].value })
+	return out
 }
 
 // flagCandidates reads the command's real flag set, so a flag that is added or
