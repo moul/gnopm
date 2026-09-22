@@ -344,6 +344,16 @@ version you are about to publish.
   -chainid     chain id, skipping discovery
   -gnokey-cmd  the client to emit, if not "gnokey": a wrapper, a path, or
                anything taking the same arguments
+  -o <file>    write the whole deploy as ONE unsigned transaction document
+               instead of N commands. A tm2 transaction carries a list of
+               messages, so one signature and one broadcast covers every
+               package: all of them land or none do, which removes the
+               half-deployed state a script can leave behind. It is also the
+               shape a multisig ceremony needs. Split into <file>.1, <file>.2
+               and so on when the deploy is larger than one transaction.
+  -addr        the creator address, which -o needs: it is a field of every
+               message and gnopm does not read your keybase. ` + "`gnokey list`" + `
+               shows it.
   -v           say what is checked and whether the chain or the cache answered
   -no-cache    ask the chain everything, ignoring ~/.gnopm`,
 			flags: func(fs *flag.FlagSet) {
@@ -351,6 +361,8 @@ version you are about to publish.
 				fs.String("rpc", "", "RPC endpoint (default: discovered from the package path)")
 				fs.String("chainid", "", "chain id (default: discovered from the package path)")
 				fs.String("gnokey-cmd", "", `the client command to emit (default "gnokey")`)
+				fs.String("o", "", "write one unsigned transaction document here instead of a script")
+				fs.String("addr", "", "the creator address, required by -o")
 			},
 			run: cmdPublish,
 		},

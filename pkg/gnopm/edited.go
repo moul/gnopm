@@ -65,9 +65,14 @@ func editedInPlace(root string, pkgs []Package, base string) ([]Package, error) 
 	return edited, nil
 }
 
-// isProdGno reports whether a repository path is gno source that gets
-// deployed. It mirrors the chain's own split, which excludes test files from
-// the stored package.
+// isProdGno reports whether a path is gno source the VM actually runs in
+// production, as opposed to a test.
+//
+// Not "what gets deployed": a _test.gno travels with the package and is charged
+// for, which is why Payload counts it. What this excludes is the files whose
+// declarations never run and whose package clause may be something else
+// entirely, so it is the right filter for "is this a behaviour change" and for
+// "which file names the package".
 func isProdGno(f string) bool {
 	return strings.HasSuffix(f, ".gno") &&
 		!strings.HasSuffix(f, "_test.gno") &&

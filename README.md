@@ -189,6 +189,34 @@ enabled or rejected, and absent is the state of the very version you are about
 to publish. Neither is `chain-id = dev`, which is `gnodev`'s default and belongs
 to a chain that gets wiped and restarted under the same name.
 
+### One signature for the whole deploy
+
+The command list is one handoff shape, and the lowest common denominator: it
+assumes the signer is a CLI on this machine, and it is **not atomic**. `set -e`
+stops at the first failure, which leaves the dependencies up and the thing that
+needed them not, a state neither the tree nor the chain describes. N packages is
+also N password prompts.
+
+A tm2 transaction carries a list of messages, not one, and `gnokey sign` does
+not care how many are in it. So `-o` writes the whole deploy as one unsigned
+document:
+
+```sh
+gnopm publish -o tx.json -addr g1... | sh   # sign once, broadcast once
+```
+
+All the packages land or none do. It is also the shape a multisig ceremony
+needs, so a DAO-owned namespace gets the same path for free. gnopm still never
+signs: it writes the document and prints the two commands.
+
+`-addr` is needed because the creator is a field of every message and gnopm does
+not read your keybase (`gnokey list` shows it). The account number and sequence
+are read from the chain and filled into the `gnokey sign` command, with the
+caveat that matters: the signature covers both, so the document stops being
+valid the moment that account signs anything else. A deploy larger than one
+transaction (`MaxTxBytes` is 1,000,000 on `gnoland-1`) is split into `tx.1.json`,
+`tx.2.json` and so on, still in dependency order, each taking the next sequence.
+
 ```sh
 gnopm publish -v          # say what is checked, and whether the chain or the cache answered
 gnopm publish -no-cache   # ask the chain everything

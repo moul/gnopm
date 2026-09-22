@@ -83,30 +83,80 @@ type UploadFile struct {
 	Size int
 }
 
+// payloadFile is one file of the payload, with where it is on disk.
+//
+// Name is the flat base name the message carries, which is not the path for a
+// filetest: the toolchain folds filetests/x_filetest.gno in as "x_filetest.gno".
+type payloadFile struct {
+	Name string
+	Path string
+	Size int
+}
+
+// payloadFiles lists exactly what `addpkg -pkgdir <dir>` uploads, in the order
+// the toolchain reads them.
+//
+// Mirrors gno's ReadMemPackage with MPUserAll (gnovm/pkg/gnolang/mempackage.go,
+// read against gno master on 2026-09-22): directory entries with an allowed
+// extension or an allowed whole name, hidden files and subdirectories skipped,
+// then the *_filetest.gno files from a filetests/ subdirectory appended.
+//
+// The filetests fold-in is easy to miss and was: skipping it under-counted the
+// payload, so gas, fee and deposit were all sized from fewer bytes than the
+// transaction actually carries, and a document built from this list would not
+// have been the package gnokey would have sent.
+func payloadFiles(dir string) ([]payloadFile, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var files []payloadFile
+	add := func(name, path string) error {
+		info, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+		files = append(files, payloadFile{Name: name, Path: path, Size: int(info.Size())})
+		return nil
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || strings.HasPrefix(name, ".") || !uploadable(name) {
+			continue
+		}
+		if err := add(name, filepath.Join(dir, name)); err != nil {
+			return nil, err
+		}
+	}
+	ft, err := os.ReadDir(filepath.Join(dir, "filetests"))
+	if err == nil {
+		for _, e := range ft {
+			name := e.Name()
+			if e.IsDir() || !strings.HasSuffix(name, "_filetest.gno") {
+				continue
+			}
+			if err := add(name, filepath.Join(dir, "filetests", name)); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return files, nil
+}
+
 // Payload lists what `addpkg -pkgdir <dir>` would upload and the byte count
 // gas and storage are charged on: file bodies plus their names, the same total
-// the message carries.
+// the message carries. Biggest first, because the report's job is to say what
+// dominates the cost.
 func Payload(dir string) ([]UploadFile, int, error) {
-	entries, err := os.ReadDir(dir)
+	raw, err := payloadFiles(dir)
 	if err != nil {
 		return nil, 0, err
 	}
-	var files []UploadFile
+	files := make([]UploadFile, 0, len(raw))
 	total := 0
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || strings.HasPrefix(name, ".") {
-			continue
-		}
-		if !uploadable(name) {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
-			return nil, 0, err
-		}
-		files = append(files, UploadFile{Name: name, Size: int(info.Size())})
-		total += int(info.Size()) + len(name)
+	for _, f := range raw {
+		files = append(files, UploadFile{Name: f.Name, Size: f.Size})
+		total += f.Size + len(f.Name)
 	}
 	sort.Slice(files, func(i, j int) bool {
 		if files[i].Size != files[j].Size {
