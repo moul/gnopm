@@ -59,9 +59,51 @@ Break one deliberately, with a reason, or not at all.
    Every guard here is built on "absent means it was published to nobody", so
    collapsing the two lets an unreachable node open all of them.
 
+## What gnopm mirrors from gno, and why it does not link it
+
+gnopm has **no third-party dependencies at all**: `go.mod` names one module, its
+own. Several rules here are therefore *mirrors* of gno's, reimplemented against
+the standard library rather than imported, and every one carries the upstream
+file it was read from and the date it was read. **When you touch one, re-read
+its source and re-date the comment.** A mirror with no provenance is a mirror
+nobody dares change.
+
+| what | mirrors | read against gno master on |
+|---|---|---|
+| `payloadFiles` in `publish.go`: which files a deploy uploads, `filetests/` fold-in included | `ReadMemPackage` with `MPUserAll`, `gnovm/pkg/gnolang/mempackage.go` | 2026-09-22 |
+| `TxDocument` in `publishtx.go`: the unsigned transaction shape | `std.Tx` / `vm.MsgAddPackage`, plus the signed-and-broadcast fixture `gno.land/pkg/integration/testdata/addpkg_multi_msg.txtar` | 2026-09-22 |
+| `scanPackages` / `readGnomod` in `workspace.go`: finding packages and their module line | `gno list`, `gnovm/cmd/gno/list.go` | 2026-09-19 |
+| `-f` in `format.go`: the go-template flag | `gno list -f`, same file | 2026-09-22 |
+| `isProdGno` in `edited.go`: which files the VM runs | the `_test.gno` / `_filetest.gno` split, `mempackage.go` | 2026-09-22 |
+
+**Linking gno instead was measured and rejected**, on this machine, against gno
+master on 2026-09-22. Importing `gnovm/pkg/packages`, which is what `gno list`
+is built on, to replace `workspace.go`:
+
+| | today | with `gnovm/pkg/packages` |
+|---|---|---|
+| binary | 12.2 MB | 37.1 MB |
+| modules in the build graph | **1** | 142 |
+| cold build (`go clean -cache` first) | ~35 s | ~76 s |
+| warm rebuild after one edit | 0.54 s | 1.12 s |
+| `go vet ./...` | 7.5 s | 15.3 s |
+
+Three times the binary and 141 new modules, to delete a scanner of about two
+hundred lines that is correct, tested, and has never been the source of a bug. The extra the loader
+returns, source/test/xtest file lists per package, is not something gnopm uses.
+That trade may flip: if gnopm ever needs real gno parsing, or if the loader
+lands in a package that does not drag the VM with it, link it and delete the
+mirrors. Until then the table above is the maintenance cost, and it is the
+cheaper one.
+
+Architecture decision 2 in #2 still holds and is not in tension with this:
+**never shell out to `gno`**. Mirroring a rule in Go and re-reading its source is
+not `system()`, and it keeps gnopm a single autonomous binary either way.
+
 ## Style
 
-**Standard library only.** Argue for a dependency in the pull request first.
+**Standard library only.** Argue for a dependency in the pull request first, and
+see the section above for the one that has already been argued and declined.
 
 **Comments explain why.** The code says what. A comment earns its place by
 recording the trap avoided, the alternative rejected, or the measurement that
