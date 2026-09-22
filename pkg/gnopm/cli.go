@@ -259,6 +259,50 @@ empty.
 			run: cmdWhy,
 		},
 		{
+			name: "graph", args: "[package]",
+			completesModules: true,
+			short:            "the dependency graph, as graphviz DOT",
+			long: `Writes the import graph on stdout as graphviz DOT, so
+
+  gnopm graph | dot -Tsvg > graph.svg
+
+works and anyone can restyle it. -svg renders it here instead, when graphviz
+is on PATH, and falls back to DOT with one line on stderr when it is not.
+DOT is the default rather than a picture because a default that changes
+shape depending on what happens to be installed makes the same command
+write two different files on two machines.
+
+With no argument, the whole workspace. With a package, its neighbourhood:
+everything it imports and everything that imports it, transitively, which
+is what somebody standing in a package wants to know.
+
+Nodes say what they are. A realm and a package are coloured differently, a
+version pinned to history is dashed because it has no directory left, and a
+module this workspace only imports is greyed because nothing here can bump
+or publish it.
+
+  -deps         only what it imports
+  -dependents   only what imports it, which is ` + "`gnopm why`" + ` drawn
+  -latest       one node per package, its highest version only: the graph
+                for a README. An approximation on purpose: an edge onto an
+                older version is redrawn onto the latest, and a version
+                importing its own predecessor disappears
+  -changed <ref>  only what changed since <ref>, plus one hop of context.
+                  ` + "`auto`" + ` uses the ref verify detects.
+  -internal     drop modules this workspace does not contain
+  -svg          render with graphviz
+  -json         nodes and edges`,
+			flags: func(fs *flag.FlagSet) {
+				fs.Bool("deps", false, "only what it imports")
+				fs.Bool("dependents", false, "only what imports it")
+				fs.Bool("latest", false, "one node per package, its highest version only")
+				fs.String("changed", "", "only what changed since this ref, plus one hop")
+				fs.Bool("internal", false, "drop modules this workspace does not contain")
+				fs.Bool("svg", false, "render with graphviz when it is on PATH")
+			},
+			run: cmdGraph,
+		},
+		{
 			name: "publish", aliases: []string{"deploy"}, args: "[pattern]",
 			completesModules: true,
 			short:            "what is missing on the chain, in dependency order, as gnokey commands",

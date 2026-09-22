@@ -495,6 +495,38 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+step "the dependency graph, as DOT and as data"
+
+echo "--- gnopm graph -latest ---"
+out=$(gnopm graph -latest 2>&1); echo "$out"
+assert_grep "$out" "digraph gnopm"
+# board imports table/v0, and -latest re-points that edge onto table/v1: one
+# node per package is the whole point, so the collapsed graph is an
+# approximation and says so in `gnopm help graph`.
+assert_grep "$out" '"gno.land/r/demo/board/v0" -> "gno.land/p/demo/table/v1"'
+# A version pinned to history has no directory left, so it has to look
+# different from one you can still edit.
+out=$(gnopm graph 2>&1)
+assert_grep "$out" 'dashed'
+# The neighbourhood of one package: what it needs and what needs it.
+out=$(gnopm graph -dependents gno.land/p/demo/table/v0 2>&1)
+assert_grep "$out" "gno.land/r/demo/board/v0"
+echo "--- gnopm graph -latest -internal -json ---"
+gnopm graph -latest -internal -json 2>/dev/null | head -14
+if command -v dot >/dev/null 2>&1; then
+  gnopm graph -latest -svg > "$repo/../graph.svg" 2>/dev/null
+  grep -q "<svg" "$repo/../graph.svg" || fail "graphviz is present but -svg produced no SVG"
+  rm -f "$repo/../graph.svg"
+  ok "graphviz is here, so -svg rendered a real picture"
+else
+  # Degrade rather than fail: CI is exactly where graphviz is absent.
+  out=$(gnopm graph -svg 2>&1)
+  assert_grep "$out" "graphviz is not on PATH"
+  assert_grep "$out" "digraph gnopm"
+  ok "no graphviz here, so -svg fell back to DOT and said why"
+fi
+
+# ---------------------------------------------------------------------------
 step "shell completion, sourced and driven rather than described"
 
 # Actually source the emitted script and drive bash's completion function,

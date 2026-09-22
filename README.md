@@ -55,6 +55,7 @@ gnopm why md/v0   # who still imports this version
 gnopm verify      # prove every pinned version still reproduces (for CI)
 gnopm tidy        # make the whole workspace right, chain included
 gnopm publish     # what is missing on chain, as gnokey commands you can read
+gnopm graph       # the dependency graph, as graphviz DOT
 gnopm clean       # drop the assembly; sync rebuilds it
 ```
 
@@ -193,6 +194,29 @@ gnopm publish -no-cache   # ask the chain everything
 GNOPM_CACHE=off gnopm …   # the same, for a whole shell; or point it elsewhere
 gnopm env                 # where the cache is, among everything else gnopm worked out
 ```
+
+## Graphs
+
+```sh
+gnopm graph | dot -Tsvg > graph.svg   # the whole workspace
+gnopm graph -latest                   # one node per package: the README picture
+gnopm graph -dependents p/alice/md/v0 # `gnopm why`, drawn
+gnopm graph -changed auto             # what this branch touched, plus one hop
+gnopm graph -svg                      # render here, when graphviz is on PATH
+```
+
+DOT is the default rather than a picture, because a default that changes shape
+depending on whether graphviz happens to be installed makes `gnopm graph >
+g.dot` write two different files on two machines, and CI is exactly where
+graphviz is absent. `-svg` asks for the picture and degrades to DOT with one
+line on stderr when it cannot have it.
+
+Nodes say what they are: a realm and a package are coloured differently, a
+version pinned to history is dashed because it has no directory left, and a
+module this workspace only imports is greyed because nothing here can bump or
+publish it. `-latest` is an approximation on purpose: an edge onto an older
+version is redrawn onto the latest, and a version importing its own predecessor
+disappears, because one node per package is the point.
 
 ## Completion
 
