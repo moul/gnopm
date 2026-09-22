@@ -72,6 +72,11 @@ func FindRoot(dir string) (string, error) {
 
 // scanPackages finds every gno package in the working tree, keyed by the
 // module path it declares rather than by where it sits.
+//
+// This is a deliberate mirror of what `gno list` does, not a delegation to it.
+// Linking gno's own loader was measured and rejected: see CONTRIBUTING.md,
+// "What gnopm mirrors from gno, and why it does not link it", which also says
+// what would flip that decision.
 func scanPackages(root string) ([]Package, error) {
 	var out []Package
 	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {

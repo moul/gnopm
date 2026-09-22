@@ -48,6 +48,12 @@ const (
 	// a few hundred bytes; 5% of the limit is generous and costs one extra
 	// batch only on a deploy already near the ceiling.
 	txBytesHeadroom = maxTxBytes / 20
+
+	// txEnvelopeBytes covers everything around the messages: the "msg" array,
+	// the fee object, the memo and the indentation. Two hundred bytes is more
+	// than any of them take, and over-reserving only ever splits a batch one
+	// message early.
+	txEnvelopeBytes = 200
 )
 
 // TxDocument is the unsigned transaction, in the amino JSON shape `gnokey
@@ -150,43 +156,54 @@ func packageClause(body string) string {
 // Order is gnopm's problem once it batches, which is the cost of doing it: the
 // input is already topological, so cutting it into contiguous runs keeps every
 // dependency ahead of its dependents both within a batch and across them.
+//
+// Sizing is by JSON length, which over-estimates: the mempool measures the
+// amino binary encoding of the signed transaction, where a file body is raw
+// bytes rather than an escaped string. Over-estimating only ever splits a batch
+// one message early, and under-estimating writes a document the mempool
+// rejects, so the error is deliberately on this side.
+//
+// Each message is marshalled once. Re-marshalling the accumulated document per
+// message, which is the obvious way to write this, is quadratic in the number
+// of packages, and a two-hundred-package workspace is exactly where batching
+// matters.
 func batchDocuments(msgs []AddPackageMsg, gas func(AddPackageMsg) int64) ([]*TxDocument, error) {
+	limit := maxTxBytes - txBytesHeadroom - txEnvelopeBytes
 	var out []*TxDocument
 	cur := &TxDocument{}
 	var curGas int64
-	flush := func() error {
+	var curBytes int
+	flush := func() {
 		if len(cur.Msgs) == 0 {
-			return nil
+			return
 		}
 		cur.Fee = feeFor(curGas)
 		out = append(out, cur)
-		cur, curGas = &TxDocument{}, 0
-		return nil
+		cur, curGas, curBytes = &TxDocument{}, 0, 0
 	}
 	for _, m := range msgs {
-		probe := &TxDocument{Msgs: append(append([]AddPackageMsg{}, cur.Msgs...), m)}
-		b, err := probe.JSON()
+		b, err := json.Marshal(m)
 		if err != nil {
 			return nil, err
 		}
-		if len(b) > maxTxBytes-txBytesHeadroom {
-			if len(cur.Msgs) == 0 {
-				// One package larger than a whole transaction. Nothing gnopm
-				// can do about that, and saying so beats writing a document
-				// the mempool will reject.
-				return nil, fmt.Errorf("%s alone is %d bytes as a transaction, over the %d limit: "+
-					"it cannot be deployed in one message", m.Package.Path, len(b), maxTxBytes)
-			}
-			if err := flush(); err != nil {
-				return nil, err
-			}
+		// One comma, one newline and the indentation of a nested object; a
+		// handful of bytes, rounded up rather than counted.
+		size := len(b) + 16
+		if size > limit {
+			// One package larger than a whole transaction. Nothing gnopm can
+			// do about that, and saying so beats writing a document the
+			// mempool will reject.
+			return nil, fmt.Errorf("%s alone is %d bytes as a transaction, over the %d limit: "+
+				"it cannot be deployed in one message", m.Package.Path, size, maxTxBytes)
+		}
+		if curBytes+size > limit {
+			flush()
 		}
 		cur.Msgs = append(cur.Msgs, m)
 		curGas += gas(m)
+		curBytes += size
 	}
-	if err := flush(); err != nil {
-		return nil, err
-	}
+	flush()
 	return out, nil
 }
 
