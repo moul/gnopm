@@ -153,15 +153,21 @@ gnopm deversion
 ```
 
 `publish` reads the chain your paths point at, says what is **live**, **parked**
-or **absent** there, and writes the `gnokey` commands for the rest in dependency
-order. It never signs: the report goes to stderr and the script to stdout, so
-generating a plan is always safe and running it is a second, deliberate step.
+or **absent** there, and publishes the rest in dependency order, running
+`gnokey` once per package with your terminal attached and stopping at the first
+failure. It still holds no key and signs nothing: gnokey does, and it prompts
+you for the passphrase exactly as it would if you had typed the command.
 
 ```sh
 gnopm publish                # the whole workspace
 gnopm publish r/moul/reaper  # one package, and what it imports from here
-gnopm publish | sh           # then run it
+gnopm publish -print         # write the commands out, run nothing
+gnopm publish -o tx.json     # one document, one signature, all of it
 ```
+
+`-print` is how you look before you leap. Save what it writes and run the file;
+do **not** pipe it into `sh`, because a pipe takes stdin away and gnokey cannot
+prompt for the passphrase.
 
 Naming one package plans its in-tree dependencies too, ahead of it: a
 dependency you could publish yourself is not a missing dependency. Only an

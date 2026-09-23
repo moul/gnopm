@@ -316,16 +316,23 @@ or publish it.
 			name: "publish", aliases: []string{"deploy"}, args: "[pattern]",
 			group:            "chain",
 			completesModules: true,
-			short:            "what is missing on the chain, in dependency order, as gnokey commands",
+			short:            "publish what is missing on the chain, in dependency order",
 			long: `Reads the chain the package paths point at, reports what is live,
-parked or absent there, and writes a shell script of gnokey commands for
-whatever is missing, ordered so a dependency goes up before its dependents.
+parked or absent there, and publishes the rest, ordered so a dependency goes
+up before its dependents.
 
-gnopm never signs and never broadcasts. The script goes to stdout and the
-report to stderr, so it can be reviewed and then piped:
+It runs gnokey once per package, in order, with your terminal attached, and
+stops at the first failure. gnopm holds no key and signs nothing: gnokey does,
+and it asks you for the passphrase exactly as it would if you had typed the
+command yourself.
 
-  gnopm publish                    # read the report, read the script
-  gnopm publish -key alice | sh    # run it, once you have read it
+  gnopm publish                    # read the report, then publish
+  gnopm publish -print             # write the commands out, run nothing
+  gnopm publish -o tx.json         # one document, one signature, all of it
+
+-print is the way to see a plan without acting on it. Save what it writes to a
+file and run that; do NOT pipe it into sh, because a pipe takes stdin away and
+gnokey cannot prompt for the passphrase.
 
 An optional pattern filters by substring against the module path or its
 directory, and what it names brings its dependencies with it: a package
@@ -355,13 +362,16 @@ version you are about to publish.
   -chainid     chain id, skipping discovery
   -gnokey-cmd  the client to emit, if not "gnokey": a wrapper, a path, or
                anything taking the same arguments
+  -print       write the commands out and run nothing. The old default, and
+               what a review, an audit trail or a ceremony wants.
   -o <file>    write the whole deploy as ONE unsigned transaction document
                instead of N commands. A tm2 transaction carries a list of
                messages, so one signature and one broadcast covers every
                package: all of them land or none do, which removes the
                half-deployed state a script can leave behind. It is also the
-               shape a multisig ceremony needs. Split into <file>.1, <file>.2
-               and so on when the deploy is larger than one transaction.
+               shape a multisig ceremony needs, with -print. Split into
+               <file>.1, <file>.2 and so on when the deploy is larger than one
+               transaction.
   -addr        the creator address, which -o needs: it is a field of every
                message and gnopm does not read your keybase. ` + "`gnokey list`" + `
                shows it.
@@ -371,7 +381,8 @@ version you are about to publish.
 				fs.String("key", "", "gnokey key name (default: the namespace in the package path)")
 				fs.String("rpc", "", "RPC endpoint (default: discovered from the package path)")
 				fs.String("chainid", "", "chain id (default: discovered from the package path)")
-				fs.String("gnokey-cmd", "", `the client command to emit (default "gnokey")`)
+				fs.String("gnokey-cmd", "", `the client command to run (default "gnokey")`)
+				fs.Bool("print", false, "write the commands out instead of running them")
 				fs.String("o", "", "write one unsigned transaction document here instead of a script")
 				fs.String("addr", "", "the creator address, required by -o")
 			},

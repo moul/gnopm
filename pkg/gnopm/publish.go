@@ -11,14 +11,20 @@ import (
 // Publish assistance: work out what is missing on a chain, in what order it
 // has to go up, what it will cost, and emit the gnokey commands.
 //
-// Architecture decision 3 is the shape of this file: gnopm never signs. It
-// reads the chain as much as it likes and then prints commands a human
-// inspects and runs. So `gnopm publish` is safe to run at any moment, and
-// `gnopm publish | sh` is the deliberate, explicit second step.
+// gnopm never signs and never holds a key. That is the invariant, and it is
+// unchanged: this file works out the commands, and gnokey is what signs them,
+// prompting on your terminal for a passphrase gnopm never sees.
 //
-// Data (the commands) goes to Out and nothing else does, so the pipe receives
-// a shell script. The report goes to Errw, where it stays visible to a human
-// and invisible to the pipe.
+// What changed is who types them. `gnopm publish` used to print a script for a
+// human to run, on the theory that the copy-paste was a review step. It was
+// not: nobody reads 200 lines of generated addpkg, and the pipe that made it
+// bearable (`gnopm publish | sh`) took stdin away from gnokey and broke the
+// passphrase prompt outright. So publish runs them, in order, stopping at the
+// first failure, and `-print` is there for the case where you genuinely do want
+// to read the plan first.
+//
+// Data goes to Out and nothing else does: the script under -print, and the
+// client's own output under a real run. The report goes to Errw.
 
 // uploadedExtensions mirrors goodFileXtns in the gno toolchain
 // (gnovm/pkg/gnolang/mempackage.go). `gnokey maketx addpkg` reads a package
@@ -185,11 +191,19 @@ func GasFor(bytes int) int64 { return int64(bytes) * gasPerByte }
 // FeeFor sizes the gas fee from the ceiling it accompanies, never below 1ugnot
 // because a zero fee is rejected outright.
 func FeeFor(gasWanted int64) string {
+	return strconv.FormatInt(feeUgnot(gasWanted), 10) + "ugnot"
+}
+
+// feeUgnot is FeeFor as a number, for summing a plan. Split out rather than
+// parsed back out of the string, because a total that disagrees with the
+// commands it summarizes is worse than no total: it is the number someone
+// checks their balance against before signing.
+func feeUgnot(gasWanted int64) int64 {
 	fee := gasWanted * feeRatioMicro / 1_000_000
 	if fee < 1 {
 		fee = 1
 	}
-	return strconv.FormatInt(fee, 10) + "ugnot"
+	return fee
 }
 
 // DepositFor is a deliberate max_deposit: the source lock with headroom for
