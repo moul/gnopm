@@ -3,6 +3,8 @@ package gnopm
 import (
 	"flag"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -254,18 +256,26 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 		}
 	}
 
-	todo, blocked := 0, 0
+	// A line per package is 200 lines in this workspace, and all but a few of
+	// them say "live", which is the one thing needing no decision. By default
+	// report only what the run will act on or what stops it; -v is the full
+	// listing, and it is what to reach for when the question is "why is that
+	// package in the plan at all".
+	todo, blocked, live := 0, 0, 0
 	for _, pl := range plans {
-		marker := ""
-		if pl.dep {
-			marker = "  (dependency)"
+		acts := pl.state == StateAbsent || pl.state == StateParked || len(pl.missing) > 0
+		if e.Verbose || acts {
+			marker := ""
+			if pl.dep {
+				marker = "  (dependency)"
+			}
+			e.logf("\n%-8s %s%s\n", pl.state, pl.pkg.Module, marker)
+			e.logf("         %d bytes in %d file(s)", pl.bytes, len(pl.files))
+			if len(pl.files) > 0 {
+				e.logf(", largest %s at %d", pl.files[0].Name, pl.files[0].Size)
+			}
+			e.logf("\n")
 		}
-		e.logf("\n%-8s %s%s\n", pl.state, pl.pkg.Module, marker)
-		e.logf("         %d bytes in %d file(s)", pl.bytes, len(pl.files))
-		if len(pl.files) > 0 {
-			e.logf(", largest %s at %d", pl.files[0].Name, pl.files[0].Size)
-		}
-		e.logf("\n")
 		for _, m := range pl.missing {
 			e.logf("         BLOCKED by %s: %s\n", m.module, m.why)
 		}
@@ -276,7 +286,12 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 			todo++
 		case pl.state == StateParked:
 			e.logf("         waiting on an approver; do not send it again\n")
+		default:
+			live++
 		}
+	}
+	if live > 0 && !e.Verbose {
+		e.logf("live     %d package(s) already on chain, nothing to do (-v lists them)\n", live)
 	}
 
 	if blocked > 0 {
@@ -295,8 +310,33 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	// for N signatures, which is strictly better whenever more than one
 	// package is going up: it is atomic, so there is no half-deployed state
 	// that neither the tree nor the chain describes.
+	// Every message carries the creator as a field, so batching cannot start
+	// without knowing which address will sign.
+	creator, creatorErr := creatorFor(gnokeyCmdOf(fs), key, flagString(fs, "addr"))
+
 	if out := flagString(fs, "o"); out != "" {
-		return writeTxHandoff(e, fs, plans, probe, key, out)
+		// -o was asked for explicitly, so not knowing the address is an
+		// error rather than a reason to quietly do something else.
+		if creatorErr != nil {
+			return fmt.Errorf("cannot tell which address will sign, and it is a field of every message: %w.\n"+
+				"  Name it with -addr g1...", creatorErr)
+		}
+		return writeTxHandoff(e, fs, plans, deps, probe, key, creator, out)
+	}
+
+	// One signature per dependency LAYER is the default, because the
+	// alternative is one per package and a workspace has hundreds. Packages
+	// in a layer do not import each other, so batching them changes nothing
+	// the chain can observe except how many times you type a passphrase.
+	// -one-tx-per-package is the way back to a transaction each.
+	if !flagBool(fs, "one-tx-per-package") {
+		if creatorErr == nil {
+			return writeTxHandoff(e, fs, plans, deps, probe, key, creator, defaultTxPath(e))
+		}
+		// Falling back rather than failing: a publish that works with more
+		// prompts beats one that refuses over a name lookup. Say why, once.
+		e.logf("note     one transaction per package: %v\n", creatorErr)
+		e.logf("         -addr g1... batches them by dependency layer instead, far fewer prompts\n")
 	}
 
 	var cmds []publishCmd
@@ -372,45 +412,58 @@ func namespaceOf(module string) string {
 // the signer reads, signs once and broadcasts once, which also happens to be
 // the shape a multisig ceremony needs, so a DAO-owned namespace gets the same
 // path for free.
-func writeTxHandoff(e *Env, fs *flag.FlagSet, plans []plan, probe *Probe, key, out string) error {
+func writeTxHandoff(e *Env, fs *flag.FlagSet, plans []plan, deps map[string][]string, probe *Probe, key, creator, out string) error {
 	chain := probe.Chain()
 
 	// creator is an address, not a key name: it is a field of the message, so
 	// gnopm has to know it before it can write anything. Resolving a keybase
 	// name would mean reading gnokey's keybase, and gnopm is not a wallet.
-	creator := flagString(fs, "addr")
-	if creator == "" && bech32ish(key) {
-		creator = key
-	}
-	if creator == "" {
-		return fmt.Errorf("-o needs the creator's address: it is a field of every message, and gnopm does not read your keybase.\n"+
-			"  `gnokey list` shows it, then: gnopm publish -o %s -addr g1...", out)
-	}
-	if !bech32ish(creator) {
-		return fmt.Errorf("%q does not look like an address. -addr takes a g1... address, not a key name", creator)
-	}
 
-	var msgs []AddPackageMsg
+	// One transaction per dependency LAYER, not one per workspace. Packages
+	// in a layer are independent of each other, so the order they execute in
+	// cannot matter and they can share a signature; a dependent waits for the
+	// layer after its dependency, which is the only ordering the chain cares
+	// about. See publishlayers.go for why the whole graph is not batched into
+	// one transaction instead.
+	layers, err := layerPlans(plans, deps)
+	if err != nil {
+		return err
+	}
 	gasOf := map[string]int64{}
-	for _, pl := range plans {
-		if pl.state != StateAbsent || len(pl.missing) > 0 {
-			continue
+	var docs []*TxDocument
+	msgCount := 0
+	for _, layer := range layers {
+		var msgs []AddPackageMsg
+		for _, pl := range layer {
+			msg, err := AddPackageFor(e.Root+"/"+pl.pkg.Dir, pl.pkg.Module, creator, DepositFor(pl.bytes))
+			if err != nil {
+				return err
+			}
+			msgs = append(msgs, msg)
+			gasOf[pl.pkg.Module] = GasFor(pl.bytes)
 		}
-		msg, err := AddPackageFor(e.Root+"/"+pl.pkg.Dir, pl.pkg.Module, creator, DepositFor(pl.bytes))
+		part, err := batchDocuments(msgs, func(m AddPackageMsg) int64 { return gasOf[m.Package.Path] })
 		if err != nil {
 			return err
 		}
-		msgs = append(msgs, msg)
-		gasOf[pl.pkg.Module] = GasFor(pl.bytes)
+		docs = append(docs, part...)
+		msgCount += len(msgs)
 	}
-	docs, err := batchDocuments(msgs, func(m AddPackageMsg) int64 { return gasOf[m.Package.Path] })
-	if err != nil {
+	if len(docs) == 0 {
+		e.logf("\nnothing to publish\n")
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 		return err
 	}
 	paths, err := writeDocuments(out, docs)
 	if err != nil {
 		return err
 	}
+
+	e.logf("\nlayers   %d dependency layer(s) -> %d transaction(s) for %d package(s)\n",
+		len(layers), len(docs), msgCount)
+	e.logf("         a layer is packages that do not import each other, so one signature covers it\n")
 
 	// Account number and sequence are covered by the signature, so they belong
 	// in the command rather than in the document. Read them when the chain
@@ -419,8 +472,6 @@ func writeTxHandoff(e *Env, fs *flag.FlagSet, plans []plan, probe *Probe, key, o
 
 	e.logf("\ncreator  %s\n", creator)
 	if len(docs) > 1 {
-		e.logf("batched  %d document(s): %d messages do not fit in one %d-byte transaction\n",
-			len(docs), len(msgs), maxTxBytes)
 		e.logf("         they stay in dependency order, so sign and broadcast them in order\n")
 	}
 	for i, p := range paths {
@@ -486,7 +537,7 @@ func writeTxHandoff(e *Env, fs *flag.FlagSet, plans []plan, probe *Probe, key, o
 	e.logf("\nnote     account %d, sequence %d, read just now. The signature covers both,\n", acct.Number, acct.Sequence)
 	e.logf("         so this document stops being valid the moment %s signs anything else.\n", key)
 	if len(docs) > 1 {
-		e.logf("         Each batch takes the next sequence, which is why order matters.\n")
+		e.logf("         Each transaction takes the next sequence, which is why order matters.\n")
 	}
 	if flagBool(fs, "print") {
 		return nil
@@ -494,8 +545,8 @@ func writeTxHandoff(e *Env, fs *flag.FlagSet, plans []plan, probe *Probe, key, o
 	// Everything in one document means one prompt, which is the reason -o
 	// exists. Running it here is what makes that reason reachable without a
 	// copy-paste that can go stale between the read and the paste.
-	e.logf("\nsign     %d document(s) for %d package(s), one %s prompt.\n",
-		len(docs), len(msgs), gnokeyCmdOf(fs))
+	e.logf("\nsign     %d document(s) for %d package(s), one %s prompt each.\n",
+		len(docs), msgCount, gnokeyCmdOf(fs))
 	e.logf("         -print writes the commands out instead of running them.\n")
 	return e.runPublish(cmds)
 }

@@ -61,19 +61,51 @@ func TestPublishTxDocument(t *testing.T) {
 			GasFee    string `json:"gas_fee"`
 		} `json:"fee"`
 	}
-	b, err := os.ReadFile(out)
+	// One transaction per dependency layer: `one` is imported by `two`, so
+	// they cannot share a signature. The suffix appears because there is more
+	// than one document.
+	base := strings.TrimSuffix(out, ".json")
+	b, err := os.ReadFile(base + ".1.json")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := json.Unmarshal(b, &doc); err != nil {
 		t.Fatalf("the document is not JSON: %v\n%s", err, b)
 	}
+	var second struct {
+		Msgs []struct {
+			Type    string `json:"@type"`
+			Creator string `json:"creator"`
+			Package struct {
+				Name  string `json:"name"`
+				Path  string `json:"path"`
+				Files []struct {
+					Name string `json:"name"`
+					Body string `json:"body"`
+				} `json:"files"`
+			} `json:"package"`
+			MaxDeposit string `json:"max_deposit"`
+		} `json:"msg"`
+		Fee struct {
+			GasWanted string `json:"gas_wanted"`
+			GasFee    string `json:"gas_fee"`
+		} `json:"fee"`
+	}
+	b2, err := os.ReadFile(base + ".2.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b2, &second); err != nil {
+		t.Fatalf("the second document is not JSON: %v\n%s", err, b2)
+	}
+	doc.Msgs = append(doc.Msgs, second.Msgs...)
 
 	if len(doc.Msgs) != 2 {
-		t.Fatalf("got %d messages, want 2", len(doc.Msgs))
+		t.Fatalf("got %d messages across both layers, want 2", len(doc.Msgs))
 	}
-	// Dependency order, inside one transaction. The messages execute in order,
-	// so an import that goes up after its dependent would fail the whole tx.
+	// Dependency order, across the layers. An import has to be live before
+	// the package that imports it is even submitted, which is why they are
+	// two transactions and not one.
 	if doc.Msgs[0].Package.Path != "gno.land/p/moul/one/v0" || doc.Msgs[1].Package.Path != "gno.land/r/moul/two/v0" {
 		t.Fatalf("out of dependency order: %s then %s", doc.Msgs[0].Package.Path, doc.Msgs[1].Package.Path)
 	}
@@ -115,7 +147,7 @@ func TestPublishTxDocument(t *testing.T) {
 	script := stdout.String()
 	for _, want := range []string{
 		"gnokey sign",
-		"-tx-path " + out,
+		"-tx-path " + strings.TrimSuffix(out, ".json") + ".1.json",
 		"-chainid test-1",
 		"-account-number 7",    // from the chain
 		"-account-sequence 42", // from the chain
@@ -180,7 +212,7 @@ func TestPublishTxUnknownAccount(t *testing.T) {
 		"-addr", testCreator, "-o", out}, &stdout, &stderr); err != nil {
 		t.Fatalf("publish -o: %v\n%s", err, stderr.String())
 	}
-	if _, err := os.Stat(out); err != nil {
+	if _, err := os.Stat(strings.TrimSuffix(out, ".json") + ".1.json"); err != nil {
 		t.Fatalf("the document was not written: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "<account-number>") {
