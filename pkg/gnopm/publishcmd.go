@@ -308,8 +308,8 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 		gas := GasFor(pl.bytes)
 		totalFee += feeUgnot(gas)
 		cmds = append(cmds, publishCmd{
-			note: fmt.Sprintf("%s: %d bytes, %d gas at %d/byte, fee %s at %s ugnot/gas",
-				pl.pkg.Module, pl.bytes, gas, gasPerByte, FeeFor(gas),
+			note: fmt.Sprintf("%s: %d bytes, %d gas (%d fixed + %d/byte), fee %s at %s ugnot/gas",
+				pl.pkg.Module, pl.bytes, gas, gasFixed, gasPerByte, FeeFor(gas),
 				strconv.FormatFloat(float64(feeRatioMicro)/1e6, 'g', -1, 64)),
 			name: gnokeyCmd,
 			groups: [][]string{
