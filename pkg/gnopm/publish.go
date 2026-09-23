@@ -42,24 +42,62 @@ var uploadedNames = map[string]bool{
 }
 
 const (
-	// gasPerByte is the top of the range measured over ten successful mainnet
-	// add_package transactions above h160000 (2026-09-19): 1,014 to 1,781 gas
-	// per uploaded byte, median 1,393. The spread is the package's own init()
-	// work, which a byte count cannot see, so size from the top. gas_wanted is
-	// a ceiling and a ceiling is not charged.
-	gasPerByte = 1800
+	// Gas for an add_package is NOT proportional to the payload. Measured over
+	// 464 successful mainnet add_package transactions (2026-09-23, read back
+	// from the tx-indexer with their exact uploaded bytes): gas per uploaded
+	// byte runs from 989 to 16,435, a 16x spread, and a least-squares fit is
+	//
+	//	gas ~= 3,800,000 + 1,285 * bytes
+	//
+	// The constant term is what every add_package pays before the first byte of
+	// source is charged for: parse, type-check, and run the package's init().
+	// The residual above the fit is that init()'s own work, which a byte count
+	// cannot see at all.
+	//
+	// A pure per-byte figure therefore cannot be a ceiling. The 1800/byte this
+	// used to carry was measured over ten LARGE packages, where the constant
+	// term is amortized away; replayed against the 464, it under-funds 173 of
+	// them (37%), by up to 9.1x on a small one. That is the bug that made
+	// `gnopm publish` die on a 4 KB package with "out of gas" after the big
+	// ones in the same run had gone through.
+	//
+	// gasFixed and gasPerByte below are an envelope, not a fit: they cover every
+	// one of the 447 non-system samples with room to spare, and all but four of
+	// the 464. The four are r/gov/dao/*, r/sys/namereg and r/gnoland/wugnot,
+	// whose init() builds a large tree at deploy time; nothing publishable from
+	// a workspace looks like that, and sizing for them would tax every ordinary
+	// package to insure against one nobody here will send.
+	//
+	// gas_wanted is a ceiling and the chain does not charge it, so the cost of
+	// this headroom is only what the fee ratio below turns it into.
+	gasFixed   = 12_000_000
+	gasPerByte = 2600
+
+	// maxBlockGas caps gas_wanted at the mainnet block limit (MaxGas in
+	// /consensus_params, 3e9 on gnoland-1 at h271568). A transaction asking for
+	// more than a block can hold is rejected outright, so clamping here turns an
+	// impossible request into one the chain will at least attempt.
+	maxBlockGas = 3_000_000_000
 
 	// feeRatioMicro is the fee offered per unit of gas, in millionths of a
-	// ugnot: 10_000 = 0.01 ugnot/gas.
+	// ugnot: 3_000 = 0.003 ugnot/gas.
 	//
 	// What the mempool enforces is the fee/gas_wanted RATIO, not the absolute
-	// (EnsureSufficientMempoolFees), so raising the ceiling raises the required
-	// fee and headroom is not free. The lowest ratio observed accepted on
-	// gno.land mainnet is 0.001 ugnot/gas; this is ten times that, which
-	// survives an upward drift for a rounding error. gas_fee is deducted in
-	// full as offered and is NEVER refunded, unlike max_deposit, so
-	// over-offering is a real cost rather than insurance.
-	feeRatioMicro = 10_000
+	// (EnsureSufficientMempoolFees compares fee/gas_wanted against the block gas
+	// price), so raising the ceiling raises the required fee and headroom is not
+	// free. gas_fee is deducted in full as offered and is NEVER refunded, unlike
+	// max_deposit, so over-offering is a real cost rather than insurance.
+	//
+	// gnoland-1 reports 1ugnot per 1000 gas (auth/gasprice, h271568), i.e.
+	// 0.001. This is three times that. It used to be ten times, which was
+	// affordable only because the ceiling above it was too small to work: with a
+	// ceiling that actually covers the fixed cost, 10x would have made a
+	// 193-package publish cost ~82 GNOT in fees. At 3x it is ~25 GNOT, still
+	// below what the broken-but-cheaper old pair quoted, and the margin is real:
+	// the block gas price is dynamic (it rises when a block exceeds the target
+	// gas ratio and decays to a floor otherwise), and a publish of this shape
+	// spends 1-3% of a block, so it does not move the price it is paying.
+	feeRatioMicro = 3_000
 
 	// storagePerByte is what a realm write locks, in ugnot per byte.
 	storagePerByte = 100
@@ -185,8 +223,20 @@ func uploadable(name string) bool {
 	return false
 }
 
-// GasFor sizes gas_wanted from the uploaded byte count.
-func GasFor(bytes int) int64 { return int64(bytes) * gasPerByte }
+// GasFor sizes gas_wanted for one add_package: the fixed cost every deployment
+// pays, plus the part that does scale with the payload, clamped to what a block
+// can hold. See the gasFixed comment for where the two numbers come from and
+// why a per-byte figure alone cannot be a ceiling.
+func GasFor(bytes int) int64 {
+	if bytes < 0 {
+		bytes = 0
+	}
+	gas := gasFixed + int64(bytes)*gasPerByte
+	if gas > maxBlockGas {
+		return maxBlockGas
+	}
+	return gas
+}
 
 // FeeFor sizes the gas fee from the ceiling it accompanies, never below 1ugnot
 // because a zero fee is rejected outright.

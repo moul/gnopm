@@ -113,8 +113,8 @@ func TestTopoOrderSurvivesACycle(t *testing.T) {
 // fee/gas_wanted, and gas_fee is deducted in full and never refunded.
 func TestFeeForIsARatioAndNeverZero(t *testing.T) {
 	for gas, want := range map[int64]string{
-		10_000_000: "100000ugnot",
-		53_182_800: "531828ugnot",
+		10_000_000: "30000ugnot",
+		53_182_800: "159548ugnot",
 		1:          "1ugnot",
 		0:          "1ugnot",
 	} {
@@ -127,8 +127,97 @@ func TestFeeForIsARatioAndNeverZero(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r := float64(fee) / float64(gas); r < 0.009 || r > 0.011 {
-		t.Errorf("ratio %.4f ugnot/gas, want ~0.01, ten times the observed floor", r)
+	// gnoland-1 reports 0.001 ugnot/gas (auth/gasprice, h271568). Three times
+	// that is margin against the dynamic block gas price without taxing every
+	// package for a congestion this workload cannot cause.
+	if r := float64(fee) / float64(gas); r < 0.0029 || r > 0.0031 {
+		t.Errorf("ratio %.4f ugnot/gas, want ~0.003, three times the chain floor", r)
+	}
+}
+
+// gasSamples are real mainnet add_package transactions, read back from the
+// tx-indexer on 2026-09-23 with the exact bytes they uploaded. They are the
+// cases that matter: the ones a per-byte ceiling gets wrong.
+//
+// The point of keeping them here is that GasFor is an envelope over measured
+// reality, and an envelope with no measurements next to it decays into a
+// number nobody dares change.
+var gasSamples = []struct {
+	path  string
+	bytes int
+	used  int64
+	// heavyInit marks a system realm whose init() builds a large tree at
+	// deploy time. These are deliberately OUTSIDE the envelope: four of the
+	// 464 samples are like this, all of them r/gov/dao/*, r/sys/* or
+	// r/gnoland/wugnot, and sizing for them would tax every ordinary package
+	// to insure against one no workspace can publish.
+	heavyInit bool
+}{
+	// The one that actually failed a publish: 4 KB, and 1800/byte funded 80%
+	// of what it needed.
+	{"gno.land/p/moul/agents/commit/v0", 4007, 9_049_792, false},
+	// Small packages are where a per-byte ceiling is worst, because the fixed
+	// cost is the whole bill: this one needs 12,821 gas per uploaded byte.
+	{"gno.land/r/g1r6luttvrkksxh9h4asjq2qd8zsd5nlkrzvyjur/pgstate", 208, 2_666_727, false},
+	{"gno.land/r/sys/rewards", 270, 3_688_651, false},
+	{"gno.land/r/tests/vm/subtests", 576, 3_302_965, false},
+	{"gno.land/r/moul/demo/hello/v0", 754, 5_930_943, false},
+	// Large ones, where the old figure worked and the constant term is
+	// amortized away. The ceiling must still cover them.
+	{"gno.land/r/samcrew/home", 40_763, 67_591_249, false},
+	{"gno.land/r/sys/namereg/v0", 50_489, 153_543_375, true},
+}
+
+// TestGasForCoversWhatTheChainActuallyCharged is the regression the old
+// per-byte ceiling could not pass: gas is a fixed cost plus a per-byte cost,
+// and sizing it from bytes alone under-funds every small package.
+func TestGasForCoversWhatTheChainActuallyCharged(t *testing.T) {
+	for _, s := range gasSamples {
+		got := GasFor(s.bytes)
+		if s.heavyInit {
+			// Documented as out of envelope. Asserted the other way round so
+			// that widening the envelope to cover it is a deliberate edit here
+			// and not an accident nobody notices.
+			if got >= s.used {
+				t.Errorf("GasFor(%d) = %d now covers heavy-init %s (%d gas); "+
+					"if that was intended, drop its heavyInit flag",
+					s.bytes, got, s.path, s.used)
+			}
+			continue
+		}
+		if got < s.used {
+			t.Errorf("GasFor(%d) = %d, below the %d gas the chain charged for %s",
+				s.bytes, got, s.used, s.path)
+		}
+		if got > 12*s.used {
+			t.Errorf("GasFor(%d) = %d, more than 12x the %d actually used for %s: "+
+				"gas_wanted is not charged, but the fee ratio is taken against it",
+				s.bytes, got, s.used, s.path)
+		}
+	}
+}
+
+// A per-byte-only ceiling is not merely tight, it is the wrong shape. This
+// pins the reason the constant changed, so reverting it fails loudly.
+func TestGasForIsNotProportionalToBytes(t *testing.T) {
+	small, big := GasFor(200), GasFor(400)
+	if big >= 2*small {
+		t.Errorf("GasFor(400)=%d vs GasFor(200)=%d: doubling the payload must not "+
+			"double the ceiling, the fixed cost dominates a small package", big, small)
+	}
+	if GasFor(0) < 1_000_000 {
+		t.Errorf("GasFor(0) = %d, but an empty package still pays to be "+
+			"parsed, type-checked and initialised", GasFor(0))
+	}
+}
+
+// gas_wanted above the block limit is rejected outright, so the ceiling clamps.
+func TestGasForClampsToABlock(t *testing.T) {
+	if got := GasFor(1 << 30); got != maxBlockGas {
+		t.Errorf("GasFor(huge) = %d, want the block limit %d", got, maxBlockGas)
+	}
+	if got := GasFor(-1); got != gasFixed {
+		t.Errorf("GasFor(-1) = %d, want the fixed cost %d", got, gasFixed)
 	}
 }
 
