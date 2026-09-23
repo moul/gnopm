@@ -707,9 +707,10 @@ func TestPrintAndRunAgreeOnTheArguments(t *testing.T) {
 	}
 }
 
-// -o is one document and one signature, and it must run the pair too: the
-// reason -o exists is one prompt for the whole deploy, which a copy-paste that
-// can go stale between the read and the paste takes back.
+// Batching must run the sign/broadcast pair itself, and do it once per
+// dependency layer: the reason batching exists is to stop paying one prompt
+// per package, which a copy-paste that can go stale between the read and the
+// paste takes back.
 func TestPublishTxRunsSignThenBroadcast(t *testing.T) {
 	root := chainRepo(t)
 	f := newFakeChain(t)
@@ -719,14 +720,32 @@ func TestPublishTxRunsSignThenBroadcast(t *testing.T) {
 	if err != nil {
 		t.Fatalf("publish -o: %v\n%s", err, report)
 	}
-	if len(ran) != 2 {
-		t.Fatalf("ran %d command(s), want sign then broadcast:\n%+v", len(ran), ran)
+	if len(ran) == 0 || len(ran)%2 != 0 {
+		t.Fatalf("ran %d command(s), want sign/broadcast pairs:\n%+v", len(ran), ran)
 	}
-	if ran[0].args[0] != "sign" || ran[1].args[0] != "broadcast" {
-		t.Fatalf("wrong order: %q then %q", ran[0].args[0], ran[1].args[0])
+	// One pair per transaction, in order, and the sequence steps once per
+	// transaction because each one is covered by its own signature.
+	for i := 0; i < len(ran); i += 2 {
+		if ran[i].args[0] != "sign" || ran[i+1].args[0] != "broadcast" {
+			t.Fatalf("pair %d is %q then %q", i/2, ran[i].args[0], ran[i+1].args[0])
+		}
+		doc := argAfter(t, ran[i].args, "-tx-path")
+		if got := ran[i+1].args[len(ran[i+1].args)-1]; got != doc {
+			t.Fatalf("pair %d signs %s and broadcasts %s", i/2, doc, got)
+		}
+		wantSeq := strconv.FormatInt(int64(42+i/2), 10)
+		if got := argAfter(t, ran[i].args, "-account-sequence"); got != wantSeq {
+			t.Fatalf("pair %d signs at sequence %s, want %s", i/2, got, wantSeq)
+		}
 	}
-	if argAfter(t, ran[0].args, "-tx-path") != out {
-		t.Fatalf("sign did not point at the document it wrote: %+v", ran[0].args)
+	// This workspace is base -> lib -> app, a chain three deep, which is the
+	// worst case for layering: every package is its own layer and batching
+	// saves nothing. That is the honest floor, and pinning it here stops
+	// anyone reading the feature as "always one signature". Width is what
+	// collapses (see TestLayerPlansGroupsIndependentPackages); depth cannot.
+	if pairs := len(ran) / 2; pairs != 3 {
+		t.Errorf("%d transaction(s) for a chain of three, want 3: a dependency "+
+			"cannot share a signature with what imports it", pairs)
 	}
 }
 

@@ -54,6 +54,16 @@ const (
 	// than any of them take, and over-reserving only ever splits a batch one
 	// message early.
 	txEnvelopeBytes = 200
+
+	// maxTxGas caps ONE batched transaction, below the block limit on
+	// purpose. The chain's dynamic gas price rises when a block goes over
+	// TargetGasRatio of MaxGas, 70% by default
+	// (tm2/pkg/sdk/auth/params.go DefaultTargetGasRatio), so a transaction
+	// asking for more than that can be the block that raises the price the
+	// rest of the same publish is about to pay. It also stops one batch
+	// monopolizing a block. A single package is still allowed the whole
+	// block: splitting it is not an option gnopm has.
+	maxTxGas = maxBlockGas * 70 / 100
 )
 
 // TxDocument is the unsigned transaction, in the amino JSON shape `gnokey
@@ -196,11 +206,21 @@ func batchDocuments(msgs []AddPackageMsg, gas func(AddPackageMsg) int64) ([]*TxD
 			return nil, fmt.Errorf("%s alone is %d bytes as a transaction, over the %d limit: "+
 				"it cannot be deployed in one message", m.Package.Path, size, maxTxBytes)
 		}
-		if curBytes+size > limit {
+		g := gas(m)
+		if g > maxBlockGas {
+			return nil, fmt.Errorf("%s alone wants %d gas, over the %d a block can hold: "+
+				"it cannot be deployed in one message", m.Package.Path, g, maxBlockGas)
+		}
+		// Two ceilings, either of which ends a transaction: the mempool
+		// rejects one over maxTxBytes, and the chain rejects one whose
+		// gas_wanted exceeds what a block can hold. Batching by bytes alone
+		// was enough while every package was its own transaction; a layer of
+		// forty is not.
+		if curBytes+size > limit || (len(cur.Msgs) > 0 && curGas+g > maxTxGas) {
 			flush()
 		}
 		cur.Msgs = append(cur.Msgs, m)
-		curGas += gas(m)
+		curGas += g
 		curBytes += size
 	}
 	flush()

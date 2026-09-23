@@ -321,14 +321,39 @@ or publish it.
 parked or absent there, and publishes the rest, ordered so a dependency goes
 up before its dependents.
 
-It runs gnokey once per package, in order, with your terminal attached, and
-stops at the first failure. gnopm holds no key and signs nothing: gnokey does,
-and it asks you for the passphrase exactly as it would if you had typed the
-command yourself.
+Packages are grouped into dependency LAYERS, and each layer goes up as one
+transaction: one passphrase prompt for the whole layer instead of one per
+package. A layer is packages that do not import each other, so the order they
+execute in cannot matter. A dependent waits for the layer after its dependency,
+which is the only ordering the chain cares about. 80 packages five layers deep
+is 6 prompts, not 80.
 
-  gnopm publish                    # read the report, then publish
-  gnopm publish -print             # write the commands out, run nothing
-  gnopm publish -o tx.json         # one document, one signature, all of it
+Batching needs to know which address will sign, because every message carries
+it as a field. gnopm asks gnokey to list its keys; -addr names it outright.
+If neither answers, publish falls back to a transaction per package and says
+so, because more prompts beats refusing to publish.
+
+gnopm holds no key and signs nothing: gnokey does, and it asks for the
+passphrase exactly as it would if you had typed the command yourself. It stops
+at the first failure.
+
+  gnopm publish                       # read the report, then publish
+  gnopm publish -print                # write the commands out, run nothing
+  gnopm publish -one-tx-per-package   # a transaction each, the unbatched shape
+  gnopm publish -o tx.json            # write the documents somewhere of your own
+
+Layers are what is batched, not the whole graph. Messages in one transaction do
+share a store and run in order, so in principle a dependent could follow its
+dependency inside a single transaction; a chain running an inert submission
+policy PARKS a submission instead of making it live, so the dependency the next
+message needs would not be there to import. Layering is correct under both.
+
+A transaction is also capped at 70% of a block's gas, which is the ratio above
+which the chain's dynamic gas price rises, so a batch never becomes the block
+that raises the price the rest of the same publish pays.
+
+By default the report names only what the run will act on or what blocks it;
+packages already on chain are one summary line. -v lists every package.
 
 -print is the way to see a plan without acting on it. Save what it writes to a
 file and run that; do NOT pipe it into sh, because a pipe takes stdin away and
@@ -364,17 +389,19 @@ version you are about to publish.
                anything taking the same arguments
   -print       write the commands out and run nothing. The old default, and
                what a review, an audit trail or a ceremony wants.
-  -o <file>    write the whole deploy as ONE unsigned transaction document
-               instead of N commands. A tm2 transaction carries a list of
-               messages, so one signature and one broadcast covers every
-               package: all of them land or none do, which removes the
-               half-deployed state a script can leave behind. It is also the
-               shape a multisig ceremony needs, with -print. Split into
-               <file>.1, <file>.2 and so on when the deploy is larger than one
-               transaction.
-  -addr        the creator address, which -o needs: it is a field of every
-               message and gnopm does not read your keybase. ` + "`gnokey list`" + `
-               shows it.
+  -o <file>    write the transaction documents here instead of under ~/.gnopm.
+               A tm2 transaction carries a list of messages, so one signature
+               and one broadcast covers a whole layer: it lands or it does not,
+               which removes the half-deployed state a script can leave behind.
+               It is also the shape a multisig ceremony needs, with -print.
+               Named <file>.1, <file>.2 and so on, one per transaction.
+  -one-tx-per-package
+               a transaction each, the unbatched shape. What to reach for when
+               a layer is too big to review in one document, or when you want a
+               failure to stop at exactly one package.
+  -addr        the creator address: it is a field of every message, so batching
+               cannot start without it. Default: asked of the key list. Without
+               it publish still works, one transaction per package.
   -v           say what is checked and whether the chain or the cache answered
   -no-cache    ask the chain everything, ignoring ~/.gnopm`,
 			flags: func(fs *flag.FlagSet) {
@@ -383,8 +410,9 @@ version you are about to publish.
 				fs.String("chainid", "", "chain id (default: discovered from the package path)")
 				fs.String("gnokey-cmd", "", `the client command to run (default "gnokey")`)
 				fs.Bool("print", false, "write the commands out instead of running them")
-				fs.String("o", "", "write one unsigned transaction document here instead of a script")
-				fs.String("addr", "", "the creator address, required by -o")
+				fs.String("o", "", "write the unsigned transaction documents here instead of the cache")
+				fs.String("addr", "", "the creator address (default: asked of `gnokey list`)")
+				fs.Bool("one-tx-per-package", false, "a transaction each, instead of one per dependency layer")
 			},
 			run: cmdPublish,
 		},
