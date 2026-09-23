@@ -2,6 +2,8 @@ package gnopm
 
 import (
 	"bytes"
+	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -237,14 +239,44 @@ func TestNamespaceOf(t *testing.T) {
 
 // --- the publish plan, end to end against a fake chain -----------------------
 
-// publishPlan runs `gnopm publish` against a fake chain and returns the script,
-// the report, and whatever the command decided.
+// publishPlan runs `gnopm publish -print` against a fake chain and returns the
+// script, the report, and whatever the command decided.
+//
+// -print, because these tests are about the PLAN: what goes up, in what order,
+// and what stops it. The default publishes, which needs a client on PATH and a
+// key; publishRun below covers that half with a fake client.
 func publishPlan(t *testing.T, root string, f *fakeChain, args ...string) (script, report string, err error) {
 	t.Helper()
 	var out, errw bytes.Buffer
-	full := append([]string{"publish", "-C", root, "-rpc", f.srv.URL, "-chainid", "test-1"}, args...)
+	full := append([]string{"publish", "-print", "-C", root, "-rpc", f.srv.URL, "-chainid", "test-1"}, args...)
 	err = Run(full, &out, &errw)
 	return out.String(), errw.String(), err
+}
+
+// ranCmd is one invocation a fake client recorded.
+type ranCmd struct {
+	name string
+	args []string
+}
+
+// publishRun runs `gnopm publish` with the client replaced, and returns what
+// the client was asked to do. fail is the 1-based index of the invocation that
+// should fail, or 0 for a run where everything succeeds.
+func publishRun(t *testing.T, root string, f *fakeChain, fail int, args ...string) (ran []ranCmd, report string, err error) {
+	t.Helper()
+	prev := startClient
+	t.Cleanup(func() { startClient = prev })
+	startClient = func(name string, a []string, _, _ *os.File) error {
+		ran = append(ran, ranCmd{name: name, args: append([]string(nil), a...)})
+		if fail == len(ran) {
+			return fmt.Errorf("fake client refused")
+		}
+		return nil
+	}
+	var out, errw bytes.Buffer
+	full := append([]string{"publish", "-C", root, "-rpc", f.srv.URL, "-chainid", "test-1"}, args...)
+	err = Run(full, &out, &errw)
+	return ran, errw.String(), err
 }
 
 // chainRepo is three packages in a line: app imports lib imports base.
@@ -284,13 +316,13 @@ func TestPublishFollowsTheImportClosure(t *testing.T) {
 		t.Fatalf("publish refused a workspace that can publish itself: %v\n%s", err, report)
 	}
 	for _, m := range []string{"gno.land/p/moul/base/v0", "gno.land/p/moul/lib/v0", "gno.land/r/moul/app/v0"} {
-		if !strings.Contains(script, "-pkgpath '"+m+"'") {
+		if !strings.Contains(script, "-pkgpath "+m+" ") {
 			t.Fatalf("%s is not in the script:\n%s\n--- report ---\n%s", m, script, report)
 		}
 	}
-	base, lib, app := strings.Index(script, "p/moul/base/v0'"),
-		strings.Index(script, "p/moul/lib/v0'"),
-		strings.Index(script, "r/moul/app/v0'")
+	base, lib, app := strings.Index(script, "-pkgpath gno.land/p/moul/base/v0"),
+		strings.Index(script, "-pkgpath gno.land/p/moul/lib/v0"),
+		strings.Index(script, "-pkgpath gno.land/r/moul/app/v0")
 	if !(base < lib && lib < app) {
 		t.Fatalf("not in dependency order (base %d, lib %d, app %d):\n%s", base, lib, app, script)
 	}
@@ -319,10 +351,11 @@ func TestPublishSkipsALiveDependency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, report)
 	}
-	if strings.Contains(script, "p/moul/base/v0'") {
+	if strings.Contains(script, "-pkgpath gno.land/p/moul/base/v0") {
 		t.Fatalf("the script re-publishes a live package:\n%s", script)
 	}
-	if !strings.Contains(script, "p/moul/lib/v0'") || !strings.Contains(script, "r/moul/app/v0'") {
+	if !strings.Contains(script, "-pkgpath gno.land/p/moul/lib/v0") ||
+		!strings.Contains(script, "-pkgpath gno.land/r/moul/app/v0") {
 		t.Fatalf("the script lost what is still absent:\n%s", script)
 	}
 }
@@ -490,4 +523,150 @@ func TestImportsInClosesTheBlock(t *testing.T) {
 			t.Errorf("%s: importsIn = %q, want %d path(s)", tc.name, got, tc.want)
 		}
 	}
+}
+
+// --- publishing, not printing ------------------------------------------------
+
+// The default has to actually run the commands, in dependency order. Printing
+// them was the old default and is now -print; the whole point of the change is
+// that nothing has to be copied out of a terminal to land a package.
+func TestPublishRunsTheClientInDependencyOrder(t *testing.T) {
+	root := chainRepo(t)
+	f := newFakeChain(t)
+
+	ran, report, err := publishRun(t, root, f, 0)
+	if err != nil {
+		t.Fatalf("publish: %v\n%s", err, report)
+	}
+	if len(ran) != 3 {
+		t.Fatalf("ran %d command(s), want 3:\n%+v", len(ran), ran)
+	}
+	var order []string
+	for _, c := range ran {
+		if c.name != "gnokey" {
+			t.Fatalf("ran %q, want the client", c.name)
+		}
+		order = append(order, argAfter(t, c.args, "-pkgpath"))
+	}
+	want := []string{"gno.land/p/moul/base/v0", "gno.land/p/moul/lib/v0", "gno.land/r/moul/app/v0"}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("published in order %v, want %v: a dependency has to land first", order, want)
+	}
+	if !strings.Contains(report, "broadcast 3 package(s)") {
+		t.Fatalf("the report must say what is about to be spent before the first prompt:\n%s", report)
+	}
+}
+
+// -print must run nothing at all. If this ever regresses, a review of a plan
+// becomes a deploy of it.
+func TestPublishPrintRunsNothing(t *testing.T) {
+	root := chainRepo(t)
+	f := newFakeChain(t)
+
+	ran, report, err := publishRun(t, root, f, 0, "-print")
+	if err != nil {
+		t.Fatalf("publish -print: %v\n%s", err, report)
+	}
+	if len(ran) != 0 {
+		t.Fatalf("-print started %d command(s), want none:\n%+v", len(ran), ran)
+	}
+}
+
+// A failure stops the run. The commands are in dependency order, so continuing
+// past one would send a transaction that is certain to be rejected and certain
+// to be charged for.
+func TestPublishStopsAtTheFirstFailure(t *testing.T) {
+	root := chainRepo(t)
+	f := newFakeChain(t)
+
+	ran, report, err := publishRun(t, root, f, 2)
+	if err == nil {
+		t.Fatalf("publish reported success after the client failed:\n%s", report)
+	}
+	if len(ran) != 2 {
+		t.Fatalf("ran %d command(s) after a failure at 2, want 2:\n%+v", len(ran), ran)
+	}
+	for _, want := range []string{"2 of 3", "re-run"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the error must say how far it got and what to do next, got: %v", err)
+		}
+	}
+}
+
+// The printed script and the executed command must be the same command. They
+// are rendered from one list of arguments precisely so they cannot drift, and
+// this is what says so.
+func TestPrintAndRunAgreeOnTheArguments(t *testing.T) {
+	root := chainRepo(t)
+	f := newFakeChain(t)
+
+	script, _, err := publishPlan(t, root, f, "p/moul/base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ran, _, err := publishRun(t, root, f, 0, "p/moul/base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ran) != 1 {
+		t.Fatalf("ran %d, want 1", len(ran))
+	}
+	for _, a := range ran[0].args {
+		if !strings.Contains(script, a) {
+			t.Fatalf("the run used %q and the script does not mention it:\n%s", a, script)
+		}
+	}
+}
+
+// -o is one document and one signature, and it must run the pair too: the
+// reason -o exists is one prompt for the whole deploy, which a copy-paste that
+// can go stale between the read and the paste takes back.
+func TestPublishTxRunsSignThenBroadcast(t *testing.T) {
+	root := chainRepo(t)
+	f := newFakeChain(t)
+	out := filepath.Join(t.TempDir(), "tx.json")
+
+	ran, report, err := publishRun(t, root, f, 0, "-o", out, "-addr", "g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5")
+	if err != nil {
+		t.Fatalf("publish -o: %v\n%s", err, report)
+	}
+	if len(ran) != 2 {
+		t.Fatalf("ran %d command(s), want sign then broadcast:\n%+v", len(ran), ran)
+	}
+	if ran[0].args[0] != "sign" || ran[1].args[0] != "broadcast" {
+		t.Fatalf("wrong order: %q then %q", ran[0].args[0], ran[1].args[0])
+	}
+	if argAfter(t, ran[0].args, "-tx-path") != out {
+		t.Fatalf("sign did not point at the document it wrote: %+v", ran[0].args)
+	}
+}
+
+// shellQuoteIfNeeded exists so the printed script stays readable. It may only
+// leave a value bare when a shell would hand it back unchanged.
+func TestShellQuoteIfNeeded(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"-pkgpath", "-pkgpath"},
+		{"gno.land/r/moul/blog", "gno.land/r/moul/blog"},
+		{"1000ugnot", "1000ugnot"},
+		{"", "''"},
+		{"two words", "'two words'"},
+		{"$(rm -rf /)", `'$(rm -rf /)'`},
+		{"it's", `'it'\''s'`},
+		{"a;b", "'a;b'"},
+	} {
+		if got := shellQuoteIfNeeded(tc.in); got != tc.want {
+			t.Fatalf("shellQuoteIfNeeded(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func argAfter(t *testing.T, args []string, flag string) string {
+	t.Helper()
+	for i, a := range args {
+		if a == flag && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	t.Fatalf("no %s in %v", flag, args)
+	return ""
 }

@@ -36,7 +36,7 @@ func TestPublishTxDocument(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "tx.json")
 
 	var stdout, stderr bytes.Buffer
-	err := Run([]string{"publish", "-C", root, "-rpc", f.srv.URL, "-chainid", "test-1",
+	err := Run([]string{"publish", "-print", "-C", root, "-rpc", f.srv.URL, "-chainid", "test-1",
 		"-key", "moul", "-addr", testCreator, "-o", out}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("publish -o: %v\n%s", err, stderr.String())
@@ -115,7 +115,7 @@ func TestPublishTxDocument(t *testing.T) {
 	script := stdout.String()
 	for _, want := range []string{
 		"gnokey sign",
-		"-tx-path '" + out + "'",
+		"-tx-path " + out,
 		"-chainid test-1",
 		"-account-number 7",    // from the chain
 		"-account-sequence 42", // from the chain
@@ -141,7 +141,7 @@ func TestPublishTxNeedsAnAddress(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "tx.json")
 
 	var stdout, stderr bytes.Buffer
-	err := Run([]string{"publish", "-C", root, "-rpc", f.srv.URL, "-chainid", "test-1",
+	err := Run([]string{"publish", "-print", "-C", root, "-rpc", f.srv.URL, "-chainid", "test-1",
 		"-key", "moul", "-o", out}, &stdout, &stderr)
 	if err == nil {
 		t.Fatal("-o without an address was accepted")
@@ -151,7 +151,7 @@ func TestPublishTxNeedsAnAddress(t *testing.T) {
 	}
 
 	// A key name in -addr is the same mistake spelled differently.
-	err = Run([]string{"publish", "-C", root, "-rpc", f.srv.URL, "-chainid", "test-1",
+	err = Run([]string{"publish", "-print", "-C", root, "-rpc", f.srv.URL, "-chainid", "test-1",
 		"-addr", "moul", "-o", out}, &stdout, &stderr)
 	if err == nil || !strings.Contains(err.Error(), "does not look like an address") {
 		t.Fatalf("a key name in -addr was accepted: %v", err)
@@ -160,7 +160,7 @@ func TestPublishTxNeedsAnAddress(t *testing.T) {
 	// An address in -key is enough on its own: it is unambiguous.
 	stdout.Reset()
 	stderr.Reset()
-	if err := Run([]string{"publish", "-C", root, "-rpc", f.srv.URL, "-chainid", "test-1",
+	if err := Run([]string{"publish", "-print", "-C", root, "-rpc", f.srv.URL, "-chainid", "test-1",
 		"-key", testCreator, "-o", out}, &stdout, &stderr); err != nil {
 		t.Fatalf("an address in -key was refused: %v\n%s", err, stderr.String())
 	}
@@ -176,7 +176,7 @@ func TestPublishTxUnknownAccount(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "tx.json")
 
 	var stdout, stderr bytes.Buffer
-	if err := Run([]string{"publish", "-C", root, "-rpc", f.srv.URL, "-chainid", "test-1",
+	if err := Run([]string{"publish", "-print", "-C", root, "-rpc", f.srv.URL, "-chainid", "test-1",
 		"-addr", testCreator, "-o", out}, &stdout, &stderr); err != nil {
 		t.Fatalf("publish -o: %v\n%s", err, stderr.String())
 	}
@@ -325,7 +325,7 @@ func TestPublishTxBatchesToNumberedFiles(t *testing.T) {
 	dir := t.TempDir()
 	out := filepath.Join(dir, "tx.json")
 	var stdout, stderr bytes.Buffer
-	if err := Run([]string{"publish", "-C", root, "-rpc", f.srv.URL, "-chainid", "test-1",
+	if err := Run([]string{"publish", "-print", "-C", root, "-rpc", f.srv.URL, "-chainid", "test-1",
 		"-addr", testCreator, "-o", out}, &stdout, &stderr); err != nil {
 		t.Fatalf("publish -o: %v\n%s", err, stderr.String())
 	}

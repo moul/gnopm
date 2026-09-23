@@ -62,8 +62,11 @@ Break one deliberately, with a reason, or not at all.
    canonical form would break every lock in existence over a wording change.
 5. **No resolver, ever.** A gno import path contains its version, so there is
    no constraint to solve. Resist anything that reintroduces one.
-6. **Not a wallet.** gnopm reads chains and may *generate* a `gnokey` command.
-   It never signs, holds a key, or broadcasts.
+6. **Not a wallet.** gnopm reads chains and may *run* the `gnokey` command it
+   generated, with your terminal attached. It never holds a key, never sees a
+   passphrase, and never signs: gnokey does, and it prompts you. `publish`
+   broadcasts by default because the copy-paste step protected nothing; `-print`
+   is the escape hatch, and the signing authority never moved either way.
 7. **A chain answer is not a chain failure.** `ABCIQuery` returns `*ABCIError`
    when a node replied and said no, and a plain error when nothing replied.
    Every guard here is built on "absent means it was published to nobody", so

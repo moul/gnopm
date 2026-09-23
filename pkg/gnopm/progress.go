@@ -53,7 +53,7 @@ type progress struct {
 // terminal a human is watching.
 //
 // Silent when piped, because the report that follows is the record and a
-// half-overwritten bar in a log file is noise. `gnopm publish | sh` pipes
+// half-overwritten bar in a log file is noise. `gnopm publish -print` pipes
 // stdout and leaves stderr on the terminal, so the common case still gets it.
 //
 // Silent under -v too: a bar rewrites one line while the verbose trace scrolls
