@@ -66,7 +66,12 @@ keeps resolving.
   <img src="docs/img/help.svg" alt="gnopm help: eighteen commands, grouped" width="800">
 </p>
 
-`status` to ask, `sync` to fix, and those two are most of it.
+`status` to ask, `sync` to fix, and those two are most of it. `sync` converges:
+whatever it tells you to run next, running it leaves nothing to say. A version
+that has left the tree, because you deleted its directory or edited its module
+line by hand, is pinned to the commit that still holds its source, the way
+`bump` would have pinned it, and on the default branch where one exists so a
+squash merge cannot strand it.
 
 <p align="center">
   <img src="docs/img/status.svg" alt="gnopm status" width="560">

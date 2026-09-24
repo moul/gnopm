@@ -15,6 +15,10 @@ type (
 const (
 	lockFile   = gnomodlock.LockFile
 	lockFormat = gnomodlock.FormatVersion
+	// gnomodFile is the manifest gno itself reads. Named here because
+	// orphan.go asks git for one by path at a commit, where a literal would
+	// be a second place to change it.
+	gnomodFile = "gnomod.toml"
 )
 
 var (
