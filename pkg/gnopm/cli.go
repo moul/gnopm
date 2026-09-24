@@ -141,14 +141,27 @@ the command that fixes it, rather than fixing it behind your back.`,
 		{
 			name: "sync", aliases: []string{"up"},
 			group: "everyday",
-			short: "make the state good: lock what is in the tree, materialize what is not",
+			short: "make the state good: lock the tree, pin what left it, materialize the rest",
 			long: `The one maintenance command. After it returns, the workspace is
 consistent: gnomod.lock describes the working tree, every version it
 pins to history is materialized under the assembly directory, and
 anything the lock no longer mentions is gone.
 
+A version that has left the tree, because its directory was deleted or
+its module line was edited by hand, is pinned to the commit that still
+holds its source, the way bump would have pinned it. That commit is
+chosen on the default branch where one exists, because a squash merge
+discards a branch's commits and would strand the pin. sync says which
+version it pinned and where, since rewriting a lock entry is a larger
+thing than the word "sync" suggests.
+
+It refuses in one case only: a version that exists on no commit at all,
+added and taken away again without ever being committed. There is
+nothing to pin, so it names the two recoveries instead of guessing.
+
 Idempotent and silent when there is nothing to do, so it is safe on a
-Makefile prerequisite, a git hook, or every save.
+Makefile prerequisite, a git hook, or every save. The git walk above
+happens only when something actually left the tree.
 
 Run it after adding or removing a package. bump runs it for you.`,
 			run: func(e *Env, fs *flag.FlagSet, args []string) error { return Sync(e) },

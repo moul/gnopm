@@ -470,6 +470,16 @@ func mustRun(t *testing.T, root string, args ...string) string {
 	return out.String() + errw.String()
 }
 
+// mustByModule is mustLock indexed, for the tests that assert on one entry.
+func mustByModule(t *testing.T, root string) map[string]*LockEntry {
+	t.Helper()
+	m, err := mustLock(t, root).ByModule()
+	if err != nil {
+		t.Fatalf("ByModule: %v", err)
+	}
+	return m
+}
+
 func mustLock(t *testing.T, root string) *Lock {
 	t.Helper()
 	l, err := readLock(root)
@@ -1089,25 +1099,32 @@ func TestWorkspaceCommandsStillDemandAWorkspace(t *testing.T) {
 	}
 }
 
-// TestSyncRefusesAnOrphanedEntry is the regression test for the one loop the
+// TestSyncRepinsAnOrphanedEntry is the regression test for the one loop the
 // README promises converges: `status` to ask, `sync` to fix.
 //
 // It did not. Taking a package out of the tree, either by deleting its
 // directory or by editing its module line by hand, left buildLock carrying the
-// old { dir } entry over untouched. sync wrote that lock, printed "updated"
-// and exited 0; `consistent`, which status and verify share, then called it
-// stale; status said "run `gnopm sync`"; and around it went. Worse in the
-// module-line case: two module paths claimed one directory, so the older path
-// silently resolved to the newer one's code and only verify ever said so.
+// old { dir } entry over untouched. sync wrote that lock, printed "updated" and
+// exited 0; `consistent`, which status and verify share, then called it stale;
+// status said "run `gnopm sync`"; and around it went. Worse in the module-line
+// case: two module paths claimed one directory, so the older path silently
+// resolved to the newer one's code and only verify ever said so.
 //
 // No unit test could see it, because every existing one drives sync through
 // bump or deversion, which pin the outgoing version first and so never produce
 // an orphan. The bug lives in the path where a human edits the tree directly.
-func TestSyncRefusesAnOrphanedEntry(t *testing.T) {
+//
+// The assertion that matters is the last one: the pinned version still
+// materializes byte-for-byte what its directory held before the edit. Pinning
+// to a commit is only useful if it is the right commit, and "sync exits 0" is
+// equally true of a pin to the wrong one.
+func TestSyncRepinsAnOrphanedEntry(t *testing.T) {
+	const body = "package a\n\nfunc A() string { return \"the v0 body\" }\n"
+
 	for _, tc := range []struct {
-		name   string
-		orphan func(t *testing.T, root string)
-		want   []string
+		name    string
+		orphan  func(t *testing.T, root string)
+		wantWhy string
 	}{
 		{
 			name: "module line moved by hand",
@@ -1115,7 +1132,7 @@ func TestSyncRefusesAnOrphanedEntry(t *testing.T) {
 				write(t, filepath.Join(root, "p/a/gnomod.toml"),
 					"module = \"gno.land/p/a/v1\"\ngno = \"0.9\"\n")
 			},
-			want: []string{"gno.land/p/a/v0", "which now declares gno.land/p/a/v1", "gnopm bump p/a"},
+			wantWhy: "p/a declares gno.land/p/a/v1 now",
 		},
 		{
 			name: "directory deleted",
@@ -1124,53 +1141,149 @@ func TestSyncRefusesAnOrphanedEntry(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			want: []string{"gno.land/p/a/v0", "which is gone", "gnopm bump p/a"},
+			wantWhy: "the directory is gone",
+		},
+		{
+			// The dangerous variant: once the removal is committed, HEAD no
+			// longer declares the version anywhere, so the pin can only come
+			// from walking back through history.
+			name: "directory deleted, and the deletion committed",
+			orphan: func(t *testing.T, root string) {
+				gitCmd(t, root, "rm", "-rq", "p/a")
+				commit(t, root, "drop a")
+			},
+			wantWhy: "the directory is gone",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := newRepo(t)
-			addPkg(t, root, "p/a", "gno.land/p/a/v0", "package a\n")
-			addPkg(t, root, "p/b", "gno.land/p/b/v0", "package b\n")
+			addPkg(t, root, "p/a", "gno.land/p/a/v0", body)
+			addPkg(t, root, "p/b", "gno.land/p/b/v0", "package b\n\nimport _ \"gno.land/p/a/v0\"\n")
 			commit(t, root, "initial")
 			mustRun(t, root, "sync")
-			before := read(t, filepath.Join(root, lockFile))
+			commit(t, root, "lock")
 
 			tc.orphan(t, root)
 
 			var out, errb bytes.Buffer
-			err := Run([]string{"sync", "-C", root}, &out, &errb)
-			if err == nil {
-				t.Fatalf("sync accepted an orphaned entry and wrote:\n%s",
-					read(t, filepath.Join(root, lockFile)))
+			if err := Run([]string{"sync", "-C", root}, &out, &errb); err != nil {
+				t.Fatalf("sync refused an orphan it could repair: %v\n%s", err, errb.String())
 			}
-			for _, w := range tc.want {
-				if !strings.Contains(err.Error(), w) {
-					t.Errorf("the error does not say %q:\n%v", w, err)
-				}
-			}
-			// Refusing means refusing: a lock gnopm will not stand behind is
-			// worse on disk than the one that is already there.
-			if got := read(t, filepath.Join(root, lockFile)); got != before {
-				t.Errorf("sync rewrote the lock anyway:\n%s", got)
+			if got := errb.String(); !strings.Contains(got, tc.wantWhy) ||
+				!strings.Contains(got, "pinned to") {
+				t.Errorf("sync did not say what it did:\n%s", got)
 			}
 
-			// And status must not send you round the loop again. It is the
-			// command that reports this state, so it owes the real fix rather
-			// than the generic "run `gnopm sync`" that cannot work here.
-			var sout, serr bytes.Buffer
-			if err := Run([]string{"status", "-C", root}, &sout, &serr); err != nil {
-				t.Fatalf("status: %v", err)
+			// The entry is now an archive entry, not a { dir } one pointing at
+			// a directory that holds something else.
+			e, ok := mustByModule(t, root)["gno.land/p/a/v0"]
+			if !ok {
+				t.Fatal("gno.land/p/a/v0 left the lock entirely")
 			}
-			got := sout.String() + serr.String()
-			if strings.Contains(got, "run `gnopm sync`") {
-				t.Errorf("status still points at sync, which refuses:\n%s", got)
+			if e.Source.InTree() {
+				t.Fatalf("still an in-tree entry: %+v", e.Source)
 			}
-			for _, w := range tc.want {
-				if !strings.Contains(got, w) {
-					t.Errorf("status does not say %q:\n%s", w, got)
-				}
+
+			// The loop converges: nothing is stale, and verify agrees.
+			if s := mustRun(t, root, "status"); !strings.Contains(s, "up to date") {
+				t.Fatalf("status did not settle:\n%s", s)
+			}
+			mustRun(t, root, "verify")
+
+			// And the pin is the RIGHT commit: what materializes is what the
+			// directory held before the edit, byte for byte.
+			got := read(t, filepath.Join(root, ".gnopm", "gno.land", "p", "a", "v0", "a.gno"))
+			if got != body {
+				t.Errorf("the pinned version is not v0's source:\n got: %q\nwant: %q", got, body)
 			}
 		})
+	}
+}
+
+// TestSyncRefusesAVersionThatIsOnNoCommit is the case a git walk cannot answer,
+// and the one place the old refusal has to survive.
+//
+// A package added and taken away again without ever being committed was never
+// anywhere: there is no commit to pin, and nothing could have imported it from
+// history either. Guessing here would mean writing a pin that resolves to
+// nothing, which verify would then reject on every later run.
+func TestSyncRefusesAVersionThatIsOnNoCommit(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "p/a", "gno.land/p/a/v0", "package a\n")
+	commit(t, root, "initial")
+	mustRun(t, root, "sync")
+	commit(t, root, "lock")
+
+	// Locked but never committed, then removed.
+	addPkg(t, root, "p/c", "gno.land/p/c/v0", "package c\n")
+	mustRun(t, root, "sync")
+	before := read(t, filepath.Join(root, lockFile))
+	if err := os.RemoveAll(filepath.Join(root, "p/c")); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errb bytes.Buffer
+	err := Run([]string{"sync", "-C", root}, &out, &errb)
+	if err == nil {
+		t.Fatalf("sync invented a pin for a version on no commit:\n%s",
+			read(t, filepath.Join(root, lockFile)))
+	}
+	for _, w := range []string{"gno.land/p/c/v0", "no commit", "gnopm bump p/c", lockFile} {
+		if !strings.Contains(err.Error(), w) {
+			t.Errorf("the error does not say %q:\n%v", w, err)
+		}
+	}
+	// Refusing means refusing: a lock gnopm will not stand behind is worse on
+	// disk than the one already there.
+	if got := read(t, filepath.Join(root, lockFile)); got != before {
+		t.Errorf("sync rewrote the lock anyway:\n%s", got)
+	}
+}
+
+// TestRepinnedOrphanPrefersTheDefaultBranch is the squash-merge rule, which
+// applies to these pins exactly as it does to bump's.
+//
+// A pin to a commit that exists only on a feature branch dangles the moment the
+// pull request lands, and `gnopm verify -upstream` rejects exactly that. So a
+// repin that could only find its version on the branch has to say so rather
+// than look like an ordinary pin, or gnopm would be quietly writing a lock its
+// own guard fails.
+func TestRepinnedOrphanPrefersTheDefaultBranch(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "p/a", "gno.land/p/a/v0", "package a\n")
+	commit(t, root, "initial")
+	mustRun(t, root, "sync")
+	commit(t, root, "lock")
+	gitCmd(t, root, "update-ref", "refs/remotes/origin/main", "HEAD")
+	gitCmd(t, root, "checkout", "-q", "-b", "feature")
+
+	// A version that only ever existed on this branch.
+	addPkg(t, root, "p/z", "gno.land/p/z/v0", "package z\n")
+	commit(t, root, "add z")
+	mustRun(t, root, "sync")
+	commit(t, root, "lock z")
+	gitCmd(t, root, "rm", "-rq", "p/z")
+	commit(t, root, "drop z")
+
+	var out, errb bytes.Buffer
+	if err := Run([]string{"sync", "-C", root}, &out, &errb); err != nil {
+		t.Fatalf("sync: %v\n%s", err, errb.String())
+	}
+	if got := errb.String(); !strings.Contains(got, "not on the default branch") {
+		t.Errorf("a branch-only pin was made silently:\n%s", got)
+	}
+
+	// The existing guard must still catch it, which is the point of warning.
+	var vout, verr bytes.Buffer
+	if err := Run([]string{"verify", "-C", root, "-upstream", "origin/main"}, &vout, &verr); err == nil {
+		t.Error("verify -upstream accepted a pin the merge would strand")
+	}
+
+	// The package still in the tree must not have been dragged onto a branch
+	// commit by the same pass.
+	e := mustByModule(t, root)["gno.land/p/a/v0"]
+	if !e.Source.InTree() {
+		t.Errorf("an in-tree package was repinned: %+v", e.Source)
 	}
 }
 
