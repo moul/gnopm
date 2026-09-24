@@ -49,7 +49,52 @@ func buildLock(old *Lock, pkgs []Package) (*Lock, error) {
 		next.Modules = append(next.Modules, e)
 	}
 	next.Sort()
+	if err := orphans(next, pkgs); err != nil {
+		return nil, err
+	}
 	return next, nil
+}
+
+// orphans rejects a lock that carries an in-tree entry whose directory no
+// longer declares it.
+//
+// buildLock's rule 2 carries over every old entry the tree no longer holds,
+// which is right for a pinned one (that IS the archive) and wrong for a
+// { dir } one: the directory is still there, or still named, but it holds
+// somebody else's code now. sync used to write that lock and report success,
+// and `consistent` (which verify and status share) then called it stale
+// forever. So `gnopm status` said "run `gnopm sync`", sync said "updated",
+// and status said the same thing again: the one loop the README promises
+// converges was the one that could not.
+//
+// Refusing is the honest answer rather than a smart one. Re-pinning the
+// vanished version to the last commit that held it is what the user meant and
+// is moul/gnopm#38; until that exists, writing nothing beats writing a lock in
+// which one directory answers to two module paths, because the older path then
+// silently resolves to the newer one's code.
+func orphans(next *Lock, pkgs []Package) error {
+	byDir := make(map[string]string, len(pkgs))
+	inTree := make(map[string]bool, len(pkgs))
+	for _, p := range pkgs {
+		byDir[p.Dir] = p.Module
+		inTree[p.Module] = true
+	}
+	for _, e := range next.Modules {
+		if !e.Source.InTree() || inTree[e.Module] {
+			continue
+		}
+		if now, ok := byDir[e.Source.Dir]; ok {
+			return fmt.Errorf("%s is locked at %s, which now declares %s.\n"+
+				"  A module line moved without the outgoing version being pinned, so nothing records where %s's code is.\n"+
+				"  Put the module line back and run `gnopm bump %s`, which pins it first; or delete its [[module]] block from %s if that version should stop resolving",
+				e.Module, e.Source.Dir, now, e.Module, e.Source.Dir, lockFile)
+		}
+		return fmt.Errorf("%s is locked at %s, which is gone.\n"+
+			"  Nothing records where that version's code is, so anything importing it stops resolving.\n"+
+			"  Restore the directory and run `gnopm bump %s` before removing it, which pins it to a commit that still holds it; or delete its [[module]] block from %s if that version should stop resolving",
+			e.Module, e.Source.Dir, e.Source.Dir, lockFile)
+	}
+	return nil
 }
 
 // freezeLock pins every working-tree package to a commit that still holds it,

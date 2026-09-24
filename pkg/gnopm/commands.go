@@ -52,6 +52,15 @@ func Status(e *Env) error {
 	e.printf("lock         %s\n", lockWhy)
 	e.printf("assembly     %s\n", asmWhy)
 	if !lockOK || !asmOK {
+		// "run `gnopm sync`" is the right advice for every staleness sync can
+		// actually repair, and a lie for the one it cannot: an entry whose
+		// directory no longer declares it. Saying it anyway is what made the
+		// status/sync loop spin, so ask the same guard sync asks and print
+		// what it says instead.
+		if err := orphans(lock, pkgs); err != nil {
+			e.printf("\n%v\n", err)
+			return nil
+		}
 		e.printf("\nrun `gnopm sync`\n")
 	}
 	return nil
@@ -195,7 +204,7 @@ func cmdBump(e *Env, fs *flag.FlagSet, args []string) error {
 	if len(args) == 0 {
 		// No argument: if you are standing in a package, that is the one you
 		// meant. Asking would be asking a question gnopm can answer.
-		pkg, err := packageAtCwd(e.Root)
+		pkg, err := packageAtCwd(e.Root, "bump")
 		if err != nil {
 			return err
 		}
@@ -324,7 +333,12 @@ func gnoHome() string {
 //
 // Nearest enclosing directory with a gnomod.toml, so it works from a package's
 // own subdirectory (filetests/, say) too.
-func packageAtCwd(root string) (string, error) {
+//
+// cmd is the command being run, because the error it returns tells you how to
+// name a package and that example has to be runnable. It used to say `gnopm
+// bump <package>` from every caller, so `gnopm why` in a directory with no
+// package answered with a command that does something else entirely.
+func packageAtCwd(root, cmd string) (string, error) {
 	wd, err := os.Getwd()
 	if err != nil {
 		return "", err
@@ -345,13 +359,13 @@ func packageAtCwd(root string) (string, error) {
 			break
 		}
 	}
-	return "", fmt.Errorf("no package here, and none given. cd into one, or name it: `gnopm bump <package>`\n" +
-		"  `gnopm ls -q` lists them")
+	return "", fmt.Errorf("no package here, and none given. cd into one, or name it: `gnopm %s <package>`\n"+
+		"  `gnopm ls -q` lists them", cmd)
 }
 
 func cmdUnbump(e *Env, fs *flag.FlagSet, args []string) error {
 	if len(args) == 0 {
-		pkg, err := packageAtCwd(e.Root)
+		pkg, err := packageAtCwd(e.Root, "unbump")
 		if err != nil {
 			return err
 		}

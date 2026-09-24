@@ -136,7 +136,7 @@ func TestBumpFindsThePackageYouAreStandingIn(t *testing.T) {
 	if err := os.Chdir(filepath.Join(root, "p/moul/md/filetests")); err != nil {
 		t.Fatal(err)
 	}
-	got, err := packageAtCwd(root)
+	got, err := packageAtCwd(root, "bump")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestBumpFindsThePackageYouAreStandingIn(t *testing.T) {
 	if err := os.Chdir(root); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := packageAtCwd(root); err == nil {
+	if _, err := packageAtCwd(root, "bump"); err == nil {
 		t.Fatal("the workspace root is not a package; it must say so")
 	}
 }
