@@ -186,3 +186,22 @@ func TestPhrase(t *testing.T) {
 		}
 	}
 }
+
+// TestNoUsageLineEndsInWhitespace walks every registered command rather than
+// naming the eight that were wrong, so adding a command cannot bring this back.
+//
+// helpFor interpolated c.args unconditionally, and c.args is empty for every
+// command with no positional argument, so `gnopm help sync` printed
+// "gnopm sync " with a trailing space. Invisible to read, and enough to stop a
+// help text from being compared against a golden file byte for byte.
+func TestNoUsageLineEndsInWhitespace(t *testing.T) {
+	for _, c := range commands {
+		var out bytes.Buffer
+		helpFor(&out, c)
+		for i, line := range strings.Split(out.String(), "\n") {
+			if line != strings.TrimRight(line, " \t") {
+				t.Errorf("gnopm help %s, line %d ends in whitespace: %q", c.name, i+1, line)
+			}
+		}
+	}
+}

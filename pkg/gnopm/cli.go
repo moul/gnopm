@@ -804,7 +804,15 @@ func usage(w io.Writer) {
 }
 
 func helpFor(w io.Writer, c *command) {
-	fmt.Fprintf(w, "gnopm %s %s\n\n%s\n", c.name, c.args, c.short)
+	// c.args is empty for every command that takes no positional argument, and
+	// interpolating it unconditionally put a trailing space on eight usage
+	// lines. Invisible, and exactly the kind of thing that stops a help text
+	// from being comparable against a golden file byte for byte.
+	usageLine := "gnopm " + c.name
+	if c.args != "" {
+		usageLine += " " + c.args
+	}
+	fmt.Fprintf(w, "%s\n\n%s\n", usageLine, c.short)
 	if c.long != "" {
 		fmt.Fprintf(w, "\n%s\n", c.long)
 	}
