@@ -1,18 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="741" height="910" viewBox="0 0 741 910" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13">
-<rect width="741" height="910" rx="10" fill="#11131a"/>
-<rect width="741" height="34" rx="10" fill="#0d1117"/>
-<rect y="24" width="741" height="10" fill="#0d1117"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="775" height="910" viewBox="0 0 775 910" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13">
+<rect width="775" height="910" rx="10" fill="#11131a"/>
+<rect width="775" height="34" rx="10" fill="#0d1117"/>
+<rect y="24" width="775" height="10" fill="#0d1117"/>
 <circle cx="18" cy="17.0" r="5.5" fill="#ff5f56"/>
 <circle cx="36" cy="17.0" r="5.5" fill="#ffbd2e"/>
 <circle cx="54" cy="17.0" r="5.5" fill="#27c93f"/>
-<text x="370.5" y="21.5" fill="#8b949e" text-anchor="middle" font-size="12">gnopm help</text>
+<text x="387.5" y="21.5" fill="#8b949e" text-anchor="middle" font-size="12">gnopm help</text>
 <text x="18" y="56" fill="#7ee787">$</text>
 <text x="34.8" y="56" fill="#d2a8ff">gnopm help</text>
 <text x="18" y="76" fill="#c9d1d9" xml:space="preserve">gnopm keeps a package&#x27;s version in gnomod.toml instead of in its directory name.</text>
 <text x="18" y="116" fill="#c9d1d9" xml:space="preserve">usage: gnopm &lt;command&gt; [options]</text>
 <text x="18" y="156" fill="#c9d1d9" xml:space="preserve">everyday: the ones you type</text>
 <text x="18" y="176" fill="#8b949e" xml:space="preserve">  status      show what the workspace resolves, and whether anything is out of date</text>
-<text x="18" y="196" fill="#8b949e" xml:space="preserve">  sync        make the state good: lock what is in the tree, materialize what is not</text>
+<text x="18" y="196" fill="#8b949e" xml:space="preserve">  sync        make the state good: lock the tree, pin what left it, materialize the rest</text>
 <text x="18" y="216" fill="#8b949e" xml:space="preserve">  bump        promote a package to its next version, in place</text>
 <text x="18" y="236" fill="#8b949e" xml:space="preserve">  unbump      fold an unpublished version back into the one before it</text>
 <text x="18" y="276" fill="#c9d1d9" xml:space="preserve">inspect: read-only questions about this workspace</text>
