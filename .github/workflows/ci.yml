@@ -55,9 +55,21 @@ jobs:
 
   # The integration test is also the demo: it builds a whole workspace from
   # nothing and asserts at every step. Running it on its own makes a failure
-  # here obvious rather than buried in the unit test output.
+  # here obvious rather than buried in the unit test output. It is also where
+  # `gnopm tool ci` is executed rather than merely recommended: that command is
+  # what every adopting repository's workflow calls, so a regression in it would
+  # otherwise reach them before it reached us.
+  #
+  # On macOS as well as Linux, because this is the part of the project that
+  # leaves Go: it drives git, grep, sed and awk through a shell, and half of
+  # this is written on a machine where those are the BSD ones. `go test` cannot
+  # see a portability break in a shell script.
   demo:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -65,7 +77,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
-      - run: ./scripts/demo.sh /tmp/gnopm-demo
+      - run: ./scripts/demo.sh "${{ runner.temp }}/gnopm-demo"
 
   install:
     runs-on: ubuntu-latest

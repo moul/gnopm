@@ -565,7 +565,14 @@ step "the CI a repository needs once it uses gnopm"
 # any of it, and does not fall behind when the checks improve.
 write .github/workflows/ci.yml <<'YAML'
 name: CI
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  # This workspace changes only when it is regenerated, and gnopm releases on
+  # its own clock. Weekly, so a release that stops agreeing with a workspace it
+  # used to pass turns something red without waiting for somebody to push.
+  schedule:
+    - cron: "17 6 * * 1"
 
 permissions:
   contents: read
@@ -587,7 +594,52 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 YAML
 commit "ci: check the workspace with gnopm"
-ok "one short workflow: three checks and a pull request comment"
+ok "one short workflow, and everything it checks lives in the binary"
+
+# Now run what that workflow runs. Writing a workflow is not executing one, and
+# `tool ci` is the single command every adopting repository calls: until this
+# ran it, a regression in it reached them before it reached us.
+#
+# Two of its four checks answer "what would the merge do", so they need an
+# upstream ref and skip themselves without one. A generated repository has no
+# remote until --push, so point origin/main at main: that is what a runner's
+# checkout looks like, and it makes those two real rather than skipped. No
+# network is involved, and the chain read stays off because a branch that
+# edited no package in place has nothing to ask a chain about.
+git_ update-ref refs/remotes/origin/main main
+
+out=$(gnopm tool ci)
+assert_grep "$out" "9 modules"
+assert_grep "$out" "the lock describes the working tree"
+assert_grep "$out" "3 version(s) rebuilt and hashed"
+assert_grep "$out" "every pin is already on origin/main"
+assert_grep "$out" "published versions are not edited in place"
+if grep -q "skipped" <<<"$out"; then fail "every check should have run, got: $out"; fi
+ok "gnopm tool ci: four checks, all green, none skipped"
+
+# And it has to bite, not merely print. A pin to a commit only this branch has
+# is exactly what a squash merge strands, and it is the failure the check
+# exists for, so the demo shows it failing too. The canary branch is deleted
+# afterwards: nothing it did reaches the history this repository is read as.
+git_ checkout -q -b squash-canary
+write NOTES.md <<'EOF'
+A file that exists only on this branch, so the commit adding it does too.
+EOF
+commit "chore: a commit only this branch has"
+python3 - "$repo/gnomod.lock" "$(git_ rev-parse HEAD)" <<'PY'
+import re, sys
+path, sha = sys.argv[1], sys.argv[2]
+before = open(path).read()
+after = re.sub(r'commit = "[0-9a-f]+"', 'commit = "%s"' % sha, before, count=1)
+assert after != before, "expected a pinned commit to restrand"
+open(path, "w").write(after)
+PY
+commit "chore: strand a pin on purpose"
+if out=$(gnopm tool ci 2>&1); then fail "tool ci passed with a stranded pin: $out"; fi
+assert_grep "$out" "a squash merge would lose it"
+git_ checkout -q main
+git_ branch -qD squash-canary
+ok "gnopm tool ci exits non-zero on a pin a squash merge would strand"
 
 # ---------------------------------------------------------------------------
 step "the README, and the final state"
@@ -662,11 +714,14 @@ gnopm bump set        # one line, then edit the files in place
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) is the whole of this
 repository's CI. It installs gnopm and runs `gnopm tool ci --comment`, which
 checks that the lock describes the tree, that every pinned version reproduces
-from history, and that no pin would be discarded by a squash merge, then keeps
-one pull request comment up to date with the result.
+from history, that no pin would be discarded by a squash merge, and that the
+branch did not edit a version a chain has already published, then keeps one
+pull request comment up to date with the result.
 
 Nothing in it is specific to this repository: the checks live in the gnopm
 binary, so adopting them is installing gnopm rather than copying a workflow.
+That also means a gnopm release can change the verdict without this workspace
+moving, so the workflow runs weekly as well as on push.
 
 The badges at the top come from `gnopm badges`.
 EOF
