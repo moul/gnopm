@@ -1,0 +1,66 @@
+# goreleaser builds the binaries a release attaches, so trying gnopm does not
+# require a Go toolchain. Run by .github/workflows/release.yml on a tag.
+#
+# It is short because gnopm gives it nothing to configure: one main package, no
+# third-party dependencies, one module in the build graph, and no cgo. See
+# CONTRIBUTING.md for why that dependency count is a deliberate property and not
+# an accident.
+version: 2
+
+before:
+  hooks:
+    # Not `go mod tidy`: a release must build exactly what the tag holds, and a
+    # hook that may rewrite go.mod turns a reproducible build into a hopeful
+    # one. Verifying is the useful half of it.
+    - go mod verify
+
+builds:
+  - id: gnopm
+    main: .
+    binary: gnopm
+    env:
+      - CGO_ENABLED=0
+    # No -X ldflags. `gnopm version` reads debug.ReadBuildInfo(), and since Go
+    # 1.24 `go build` stamps Main.Version from the VCS tag on its own, so a
+    # goreleaser build already reports the tag. Measured against v0.8.0 on
+    # 2026-09-24: a plain `go build` in a clean checkout of the tag prints
+    # "gnopm v0.8.0 (41176f0231fb)", with and without ldflags, identically.
+    # Adding a -X here would be a second source of truth that can disagree.
+    flags:
+      - -trimpath
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    # No version in the archive name, deliberately. GitHub's
+    # releases/latest/download/<name> redirect only resolves a name that is the
+    # same in every release, and a working one-line install is worth more than
+    # unique filenames in a downloads folder. The version is inside: the binary
+    # reports it, and checksums.txt is per release.
+    #
+    # uname spellings for both halves, so the name is what `uname -s | tr A-Z
+    # a-z` and `uname -m` compute and the README's curl line needs no lookup
+    # table.
+    name_template: >-
+      {{ .ProjectName }}_{{ .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64{{ else if eq .Arch "arm64" }}arm64{{ else }}{{ .Arch }}{{ end }}
+    files:
+      - README.md
+      - CONTRIBUTING.md
+      - COPYRIGHT
+
+checksum:
+  name_template: checksums.txt
+
+# The release notes are written by hand, because what changed and why is not
+# derivable from commit subjects. append leaves an existing body alone and only
+# attaches the artifacts; replacing it would silently discard the prose.
+release:
+  mode: append
+
+changelog:
+  disable: true

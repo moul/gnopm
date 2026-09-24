@@ -2,3 +2,5 @@
 /.gnopm/
 # the built binary
 /gnopm
+# goreleaser output
+/dist/
