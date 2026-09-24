@@ -1,0 +1,43 @@
+name: Bug report
+description: gnopm did something wrong, or something surprising
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Surprising counts as a bug even when gnopm behaved as documented. Most of
+        what is in the tool started as somebody saying "I expected it to just do
+        that".
+  - type: textarea
+    id: what
+    attributes:
+      label: What you ran, what happened, what you expected
+      placeholder: |
+        $ gnopm sync
+        gnomod.lock updated: 2 modules (1 in tree, 0 pinned to history)
+
+        $ gnopm status
+        lock         stale: ...
+
+        I expected status to be clean after sync.
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: "`gnopm version` and `gnopm env`"
+      description: >
+        env prints what gnopm detected rather than what it was told, which is
+        usually the difference between a five-minute answer and an afternoon.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: A recipe that reproduces it from nothing
+      description: >
+        Optional, and the best thing you can send. scripts/demo.sh is the shape:
+        build a workspace in a temporary directory, then run the command. It
+        turns a report into a regression test.
+      render: shell

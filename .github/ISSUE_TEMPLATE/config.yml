@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Roadmap, design notes and open questions
+    url: https://github.com/moul/gnopm/issues/2
+    about: The meta issue. Goal, architecture decisions, non-goals, and the place to argue before building something large.
+  - name: Migrating a repository onto gnopm
+    url: https://github.com/moul/gnopm/issues/3
+    about: What a migration is, why, and what to look at when reviewing one.
+  - name: Contributing guide
+    url: https://github.com/moul/gnopm/blob/main/CONTRIBUTING.md
+    about: Setup, layout, the seven claims the code keeps making, and what done means.

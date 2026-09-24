@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="590" height="190" viewBox="0 0 590 190" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13">
+<rect width="590" height="190" rx="10" fill="#11131a"/>
+<rect width="590" height="34" rx="10" fill="#0d1117"/>
+<rect y="24" width="590" height="10" fill="#0d1117"/>
+<circle cx="18" cy="17.0" r="5.5" fill="#ff5f56"/>
+<circle cx="36" cy="17.0" r="5.5" fill="#ffbd2e"/>
+<circle cx="54" cy="17.0" r="5.5" fill="#27c93f"/>
+<text x="295.0" y="21.5" fill="#8b949e" text-anchor="middle" font-size="12">gnopm tidy -offline</text>
+<text x="18" y="56" fill="#7ee787">$</text>
+<text x="34.8" y="56" fill="#d2a8ff">gnopm tidy -offline</text>
+<text x="18" y="76" fill="#c9d1d9" xml:space="preserve">assembly updated: 3 materialized (0 extracted, 3 cached, 1 pruned)</text>
+<text x="18" y="96" fill="#c9d1d9" xml:space="preserve">drop gno.land/p/demo/math/bignum/v0 (nothing imports it)</text>
+<text x="18" y="116" fill="#c9d1d9" xml:space="preserve">assembly updated: 2 materialized (0 extracted, 2 cached, 1 pruned)</text>
+<text x="18" y="136" fill="#f0883e" xml:space="preserve">gnopm: ok, 8 modules locked (6 in tree, 2 pinned to history)</text>
+<text x="18" y="156" fill="#c9d1d9" xml:space="preserve">chain        skipped (-offline)</text>
+</svg>

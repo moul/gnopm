@@ -35,6 +35,8 @@ scripts/demo.sh         the integration test, which is also the demo
 scripts/screenshots.sh  regenerates docs/img/ from real output
 staticcheck.conf        which checks are on, and why one is off
 docs/                   the site at moul.github.io/gnopm
+docs/img/               generated terminal captures, plus the logo and banner
+.github/ISSUE_TEMPLATE/ the bug and idea forms, and the links beside them
 ```
 
 **Logic belongs in a package.** Adding code to `main.go` is a smell: the root
@@ -159,9 +161,17 @@ make          # go test, go vet, gofmt, staticcheck, and the demo
 Part of a change, not follow-up work.
 
 - **`README.md`** is the reference. Behaviour change means a README change.
-- **`./scripts/screenshots.sh`** regenerates `docs/img/` from real output. Run
-  it when output changes. Never hand-edit an SVG or hand-write output into the
-  script: an image that is not a real capture is wrong within a week.
+- **`./scripts/screenshots.sh`** regenerates the terminal captures in
+  `docs/img/` from real output. Run it when output changes. Never hand-edit one
+  or hand-write output into the script: an image that is not a real capture is
+  wrong within a week. It runs offline, like everything else here, which is why
+  the `tidy` capture is `-offline` and why there is no `publish` one.
+- **`docs/img/logo.svg`** and **`docs/img/banner.svg`** are the two files that
+  are drawn rather than captured. `banner.png` is rendered from the svg and is
+  what `og:image` and the repository's social preview point at, so regenerate it
+  whenever the svg changes. The accent is `#7ee787`, the same green
+  `scripts/termsvg.py` uses for a prompt and for ok, so the logo and the
+  terminal images stay one thing.
 - **`docs/`** is the site. Keep it honest with the README rather than longer.
 - **[moul/gnopm-demo](https://github.com/moul/gnopm-demo)** is regenerated,
   never edited: `./scripts/demo.sh /tmp/demo --push moul/gnopm-demo`.

@@ -76,4 +76,30 @@ git -C "$old" -c commit.gpgsign=false commit -q -m "the old layout"
 { echo '$ gnopm deversion -n'; "$bin" -C "$old" deversion -n 2>&1; } \
   | svg "gnopm deversion -n" deversion.svg
 
+# 6. the whole surface, grouped. Eighteen commands in one column was a wall,
+#    and this is the first thing anybody who types `gnopm` sees.
+{ echo '$ gnopm help'; "$bin" help 2>&1; } | svg "gnopm help" help.svg
+
+# 7. why, on the case that is the whole reason it exists. strs/v0's only
+#    importer is table/v0, which has no directory at all: it is pinned to
+#    history and materialized under .gnopm. grep over the working tree finds
+#    nothing, and would tell you the version is safe to drop.
+{
+  echo '$ gnopm why gno.land/p/demo/strs/v1'
+  gnopm why gno.land/p/demo/strs/v1 2>&1
+  echo ''
+  echo '$ gnopm why gno.land/p/demo/strs/v0'
+  gnopm why gno.land/p/demo/strs/v0 2>&1
+  echo ''
+  echo '# table/v0 has no directory. It is pinned to history:'
+  echo '$ gnopm ls'
+  gnopm ls 2>&1 | grep -E 'MODULE|table'
+} | svg "gnopm why: the importer with no directory" why.svg
+
+# 8. tidy, offline: the pass that finds a version number spent on nothing.
+#    -offline because this script runs with no network, by the same rule that
+#    keeps the demo a real integration test.
+{ echo '$ gnopm tidy -offline'; gnopm tidy -offline 2>&1 || true; } \
+  | svg "gnopm tidy -offline" tidy.svg
+
 ls -1 "$out"

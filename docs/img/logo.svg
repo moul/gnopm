@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="gnopm">
+  <title>gnopm</title>
+  <!-- A version number is a tag on something published, not a counter. The
+       mark is that sentence: a tag, carrying the number, with nothing else in
+       it. Green is #7ee787, the same accent scripts/termsvg.py uses for a
+       prompt and for ok, so the logo and the terminal images match. -->
+  <rect width="256" height="256" rx="56" fill="#0d1117"/>
+  <path d="M40 128 L90 70 H200 a14 14 0 0 1 14 14 v88 a14 14 0 0 1 -14 14 H90 Z"
+        fill="none" stroke="#7ee787" stroke-width="15" stroke-linejoin="round"/>
+  <circle cx="99" cy="128" r="11" fill="#7ee787"/>
+  <text x="156" y="129" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"
+        font-size="64" font-weight="700" fill="#7ee787"
+        text-anchor="middle" dominant-baseline="central">v1</text>
+</svg>
