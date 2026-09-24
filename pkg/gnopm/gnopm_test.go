@@ -1088,3 +1088,133 @@ func TestWorkspaceCommandsStillDemandAWorkspace(t *testing.T) {
 		}
 	}
 }
+
+// TestSyncRefusesAnOrphanedEntry is the regression test for the one loop the
+// README promises converges: `status` to ask, `sync` to fix.
+//
+// It did not. Taking a package out of the tree, either by deleting its
+// directory or by editing its module line by hand, left buildLock carrying the
+// old { dir } entry over untouched. sync wrote that lock, printed "updated"
+// and exited 0; `consistent`, which status and verify share, then called it
+// stale; status said "run `gnopm sync`"; and around it went. Worse in the
+// module-line case: two module paths claimed one directory, so the older path
+// silently resolved to the newer one's code and only verify ever said so.
+//
+// No unit test could see it, because every existing one drives sync through
+// bump or deversion, which pin the outgoing version first and so never produce
+// an orphan. The bug lives in the path where a human edits the tree directly.
+func TestSyncRefusesAnOrphanedEntry(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		orphan func(t *testing.T, root string)
+		want   []string
+	}{
+		{
+			name: "module line moved by hand",
+			orphan: func(t *testing.T, root string) {
+				write(t, filepath.Join(root, "p/a/gnomod.toml"),
+					"module = \"gno.land/p/a/v1\"\ngno = \"0.9\"\n")
+			},
+			want: []string{"gno.land/p/a/v0", "which now declares gno.land/p/a/v1", "gnopm bump p/a"},
+		},
+		{
+			name: "directory deleted",
+			orphan: func(t *testing.T, root string) {
+				if err := os.RemoveAll(filepath.Join(root, "p/a")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: []string{"gno.land/p/a/v0", "which is gone", "gnopm bump p/a"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := newRepo(t)
+			addPkg(t, root, "p/a", "gno.land/p/a/v0", "package a\n")
+			addPkg(t, root, "p/b", "gno.land/p/b/v0", "package b\n")
+			commit(t, root, "initial")
+			mustRun(t, root, "sync")
+			before := read(t, filepath.Join(root, lockFile))
+
+			tc.orphan(t, root)
+
+			var out, errb bytes.Buffer
+			err := Run([]string{"sync", "-C", root}, &out, &errb)
+			if err == nil {
+				t.Fatalf("sync accepted an orphaned entry and wrote:\n%s",
+					read(t, filepath.Join(root, lockFile)))
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(err.Error(), w) {
+					t.Errorf("the error does not say %q:\n%v", w, err)
+				}
+			}
+			// Refusing means refusing: a lock gnopm will not stand behind is
+			// worse on disk than the one that is already there.
+			if got := read(t, filepath.Join(root, lockFile)); got != before {
+				t.Errorf("sync rewrote the lock anyway:\n%s", got)
+			}
+
+			// And status must not send you round the loop again. It is the
+			// command that reports this state, so it owes the real fix rather
+			// than the generic "run `gnopm sync`" that cannot work here.
+			var sout, serr bytes.Buffer
+			if err := Run([]string{"status", "-C", root}, &sout, &serr); err != nil {
+				t.Fatalf("status: %v", err)
+			}
+			got := sout.String() + serr.String()
+			if strings.Contains(got, "run `gnopm sync`") {
+				t.Errorf("status still points at sync, which refuses:\n%s", got)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(got, w) {
+					t.Errorf("status does not say %q:\n%s", w, got)
+				}
+			}
+		})
+	}
+}
+
+// TestSyncConvergesOnAHealthyWorkspace is the other half, and the one that
+// would catch the fix above being too eager: the guard must not fire on a
+// workspace that is merely out of date, which is every normal sync.
+func TestSyncConvergesOnAHealthyWorkspace(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "p/a", "gno.land/p/a/v0", "package a\n")
+	commit(t, root, "initial")
+	mustRun(t, root, "sync")
+
+	// A bump leaves a pinned entry with no directory, which is the archive and
+	// is exactly what the guard must not mistake for an orphan.
+	mustRun(t, root, "bump", "p/a")
+	mustRun(t, root, "sync")
+
+	// Adding a package is the other everyday case.
+	addPkg(t, root, "p/c", "gno.land/p/c/v0", "package c\n")
+	mustRun(t, root, "sync")
+
+	if out := mustRun(t, root, "status"); !strings.Contains(out, "up to date") {
+		t.Fatalf("status did not settle:\n%s", out)
+	}
+	mustRun(t, root, "verify")
+}
+
+// TestNoPackageErrorNamesTheCommandYouRan: the example in an error has to be a
+// command that does what you were trying to do. packageAtCwd hardcoded `gnopm
+// bump <package>` for every caller, so `gnopm why` in a directory holding no
+// package answered by suggesting a command that rewrites a module line.
+func TestNoPackageErrorNamesTheCommandYouRan(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "p/a", "gno.land/p/a/v0", "package a\n")
+	commit(t, root, "initial")
+	mustRun(t, root, "sync")
+
+	for _, cmd := range []string{"bump", "unbump", "why"} {
+		_, err := packageAtCwd(root, cmd)
+		if err == nil {
+			t.Fatalf("%s: expected no package at the workspace root", cmd)
+		}
+		if want := "`gnopm " + cmd + " <package>`"; !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: the error does not say %s:\n%v", cmd, want, err)
+		}
+	}
+}

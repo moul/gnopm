@@ -74,7 +74,7 @@ func cmdWhy(e *Env, fs *flag.FlagSet, args []string) error {
 	if len(args) == 0 {
 		// Standing in a package is an answer, so asking for one would be
 		// asking a question gnopm can work out.
-		pkg, err := packageAtCwd(e.Root)
+		pkg, err := packageAtCwd(e.Root, "why")
 		if err != nil {
 			return err
 		}
