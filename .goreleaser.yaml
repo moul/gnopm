@@ -22,10 +22,16 @@ builds:
       - CGO_ENABLED=0
     # No -X ldflags. `gnopm version` reads debug.ReadBuildInfo(), and since Go
     # 1.24 `go build` stamps Main.Version from the VCS tag on its own, so a
-    # goreleaser build already reports the tag. Measured against v0.8.0 on
-    # 2026-09-24: a plain `go build` in a clean checkout of the tag prints
-    # "gnopm v0.8.0 (41176f0231fb)", with and without ldflags, identically.
-    # Adding a -X here would be a second source of truth that can disagree.
+    # goreleaser build already reports the tag. Measured 2026-09-24 against a
+    # clean checkout at a tag: `goreleaser build --snapshot=false` prints
+    # "gnopm v0.9.0 (28fce2363ea8)". Adding a -X here would be a second source
+    # of truth that can disagree with the first.
+    #
+    # If you go to check that and see a pseudo-version instead, the tag is the
+    # problem, not this file. Go only stamps a semver tag whose MAJOR matches
+    # the module path, so `v9.9.9` on moul.io/gnopm is ignored (it would need
+    # moul.io/gnopm/v9) and the build falls back to v0.8.1-0.<date>-<commit>.
+    # Test with a tag you would actually cut.
     flags:
       - -trimpath
     goos: [linux, darwin, windows]
