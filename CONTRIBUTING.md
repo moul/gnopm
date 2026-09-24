@@ -33,6 +33,8 @@ pkg/gnopm/              the operations: Sync, Bump, Unbump, Verify, Tidy, Devers
 pkg/gnomodlock/         the gnomod.lock format, independent of the CLI
 scripts/demo.sh         the integration test, which is also the demo
 scripts/screenshots.sh  regenerates docs/img/ from real output
+scripts/fakechain/      answers the two ABCI queries publish makes, and nothing
+                        else, so the publish capture stays offline
 staticcheck.conf        which checks are on, and why one is off
 docs/                   the site at moul.github.io/gnopm
 docs/img/               generated terminal captures, plus the logo and banner
@@ -165,7 +167,8 @@ Part of a change, not follow-up work.
   `docs/img/` from real output. Run it when output changes. Never hand-edit one
   or hand-write output into the script: an image that is not a real capture is
   wrong within a week. It runs offline, like everything else here, which is why
-  the `tidy` capture is `-offline` and why there is no `publish` one.
+  the `tidy` capture is `-offline` and why `publish` is captured against
+  [`scripts/fakechain`](./scripts/fakechain) rather than a real node.
 - **`docs/img/logo.svg`** and **`docs/img/banner.svg`** are the two files that
   are drawn rather than captured. `banner.png` is rendered from the svg and is
   what `og:image` and the repository's social preview point at, so regenerate it
