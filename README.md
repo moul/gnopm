@@ -18,12 +18,26 @@
 </p>
 
 ```sh
-go install moul.io/gnopm@latest
+go install moul.io/gnopm@latest        # with Go
+```
+
+or take the binary, on a machine with no Go at all:
+
+```sh
+curl -sSfL https://github.com/moul/gnopm/releases/latest/download/gnopm_linux_x86_64.tar.gz \
+  | tar -xz gnopm && sudo mv gnopm /usr/local/bin/
+```
+
+Then:
+
+```sh
 gnopm status      # ask
 gnopm sync        # fix
 ```
 
-No dependencies, no gno toolchain required, no network required. One binary.
+No dependencies, no gno toolchain required, no network required. One binary,
+and [every release](https://github.com/moul/gnopm/releases) carries it built for
+linux, macOS and Windows on amd64 and arm64, with checksums.
 
 ---
 
