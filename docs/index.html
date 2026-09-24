@@ -3,11 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>gnopm — a package manager for gno workspaces</title>
+<title>gnopm: a package manager for gno workspaces</title>
 <meta name="description" content="gnopm keeps a gno package's version in gnomod.toml instead of in its directory name, so a version bump is a one-line change plus a real diff instead of a copied directory git cannot pair.">
 <meta property="og:title" content="gnopm">
 <meta property="og:description" content="A package manager for gno workspaces. The version lives in gnomod.toml, not in the directory name.">
 <meta property="og:type" content="website">
+<meta property="og:image" content="https://moul.github.io/gnopm/img/banner.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="img/logo.svg" type="image/svg+xml">
 <style>
   :root{--bg:#0d1117;--panel:#11131a;--fg:#c9d1d9;--dim:#8b949e;--acc:#7ee787;--acc2:#d2a8ff;--line:#21262d}
   @media (prefers-color-scheme: light){
@@ -18,6 +21,7 @@
     font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
   .wrap{max-width:860px;margin:0 auto;padding:0 20px 80px}
   header{padding:64px 0 28px;border-bottom:1px solid var(--line)}
+  header .mark{display:block;margin-bottom:18px}
   h1{font-size:44px;margin:0 0 6px;letter-spacing:-.02em}
   h1 span{color:var(--acc)}
   .tag{color:var(--dim);font-size:19px;margin:0 0 22px}
@@ -47,12 +51,13 @@
 <div class="wrap">
 
 <header>
+  <img class="mark" src="img/logo.svg" alt="" width="72" height="72">
   <h1>gno<span>pm</span></h1>
   <p class="tag">A package manager for <a href="https://gno.land">gno</a> workspaces.</p>
   <p class="badges">
     <a href="https://github.com/moul/gnopm/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/moul/gnopm/actions/workflows/ci.yml/badge.svg"></a>
     <a href="https://pkg.go.dev/moul.io/gnopm"><img alt="Go Reference" src="https://pkg.go.dev/badge/moul.io/gnopm.svg"></a>
-    <a href="https://goreportcard.com/report/moul.io/gnopm"><img alt="Go Report Card" src="https://goreportcard.com/badge/moul.io/gnopm"></a>
+    <a href="https://github.com/moul/gnopm/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/moul/gnopm?label=release&amp;color=7ee787"></a>
     <a href="https://github.com/moul/gnopm#license"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0%20%2F%20MIT-%2397ca00.svg"></a>
     <a href="https://github.com/moul/gnopm"><img alt="GitHub" src="https://img.shields.io/badge/github-moul%2Fgnopm-blue"></a>
   </p>

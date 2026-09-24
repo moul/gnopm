@@ -1,0 +1,31 @@
+name: Command, flag or idea
+description: Something gnopm should be able to do
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For anything large, argue in [#2](https://github.com/moul/gnopm/issues/2)
+        first: it holds the goal, the roadmap, the architecture decisions and the
+        non-goals, and a proposal reads better against them.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do, and what do you do today instead
+      description: >
+        The workaround matters more than the feature. It says what the real shape
+        is, and it is often already half a design.
+    validations:
+      required: true
+  - type: textarea
+    id: shape
+    attributes:
+      label: What you would type, and what it would print
+      render: shell
+  - type: textarea
+    id: rejected
+    attributes:
+      label: What you considered and rejected
+      description: >
+        Optional. The interesting part of a change is usually the option that did
+        not win.

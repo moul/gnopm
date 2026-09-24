@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-label="gnopm, a package manager for gno workspaces">
+  <title>gnopm</title>
+  <rect width="1280" height="640" fill="#0d1117"/>
+  <g transform="translate(232 196) scale(0.75)" color="#7ee787">
+    <path d="M28 128 L84 64 H208 a16 16 0 0 1 16 16 v96 a16 16 0 0 1 -16 16 H84 Z"
+          fill="none" stroke="currentColor" stroke-width="16" stroke-linejoin="round"/>
+    <circle cx="92" cy="128" r="12" fill="currentColor"/>
+    <text x="156" y="129" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"
+          font-size="72" font-weight="700" fill="currentColor"
+          text-anchor="middle" dominant-baseline="central">v1</text>
+  </g>
+  <text x="440" y="286" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"
+        font-size="108" font-weight="700" fill="#e6edf3">gnopm</text>
+  <text x="446" y="352" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"
+        font-size="30" fill="#8b949e">a package manager for gno workspaces</text>
+  <text x="640" y="486" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"
+        font-size="32" fill="#7ee787" text-anchor="middle">the version lives in gnomod.toml, not in the directory name</text>
+</svg>
