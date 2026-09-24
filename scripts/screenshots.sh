@@ -102,4 +102,52 @@ git -C "$old" -c commit.gpgsign=false commit -q -m "the old layout"
 { echo '$ gnopm tidy -offline'; gnopm tidy -offline 2>&1 || true; } \
   | svg "gnopm tidy -offline" tidy.svg
 
+# 9. publish, the command most worth showing and the only one that reads a
+#    chain. scripts/fakechain answers the two ABCI queries it makes, so this
+#    stays offline like everything else here: a capture taken once against
+#    mainnet would be wrong the first time the report's wording changed.
+#
+#    The port is pinned rather than picked, because a random one would put a
+#    different number in the committed svg on every run. 26657 is tm2's own
+#    default, so the image also reads as a real chain.
+chain_port=26657
+if command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 "$chain_port" 2>/dev/null; then
+  echo "port $chain_port is in use, so the publish capture would not be reproducible." >&2
+  echo "stop whatever is on it and re-run." >&2
+  exit 1
+fi
+# Built, not `go run`: `go run` execs the compiled binary as a child, so
+# killing the go process leaves the listener holding the port and the next run
+# trips the guard above. The script already builds gnopm this way for the same
+# class of reason.
+chain_bin="$(mktemp -d)/fakechain"
+(cd "$root" && go build -o "$chain_bin" ./scripts/fakechain)
+"$chain_bin" \
+  -addr "127.0.0.1:$chain_port" \
+  -live gno.land/p/nt/tinyavl/v0,gno.land/p/demo/table/v0,gno.land/p/demo/strs/v0,gno.land/p/demo/strs/v1 \
+  -parked gno.land/p/demo/orphan/v0 >/dev/null 2>&1 &
+chain_pid=$!
+trap 'kill "$chain_pid" 2>/dev/null || true' EXIT
+# Wait for the listener rather than sleeping a guess.
+for _ in $(seq 1 50); do
+  (exec 3<>/dev/tcp/127.0.0.1/"$chain_port") 2>/dev/null && break
+  sleep 0.1
+done
+
+#    The report only. publish also writes the gnokey commands, and a picture
+#    that includes twenty lines of shell says less than one that fits.
+{
+  echo '$ gnopm publish -o tx.json -addr g1jg8...sqf5'
+  GNOPM_CACHE=off gnopm publish -o tx.json \
+    -addr g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5 \
+    -rpc "http://127.0.0.1:$chain_port" -chainid test 2>&1 |
+    sed '/^#!\/bin\/sh/,$d'
+  echo '# (it also writes the two gnokey commands, cut here)'
+} | svg "gnopm publish: live, parked, absent, and one signature for the rest" publish.svg
+# -o is resolved against the process working directory, not against -C, so the
+# document lands here rather than in the demo repository.
+rm -f "$root/tx.json"
+kill "$chain_pid" 2>/dev/null || true
+trap - EXIT
+
 ls -1 "$out"

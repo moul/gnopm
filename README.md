@@ -186,6 +186,10 @@ gnopm publish -print         # write the commands out, run nothing
 gnopm publish -o tx.json     # one document, one signature, all of it
 ```
 
+<p align="center">
+  <img src="docs/img/publish.svg" alt="gnopm publish: live, parked, absent, and one signature for the rest" width="800">
+</p>
+
 `-print` is how you look before you leap. Save what it writes and run the file;
 do **not** pipe it into `sh`, because a pipe takes stdin away and gnokey cannot
 prompt for the passphrase.

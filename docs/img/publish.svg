@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="758" height="750" viewBox="0 0 758 750" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13">
+<rect width="758" height="750" rx="10" fill="#11131a"/>
+<rect width="758" height="34" rx="10" fill="#0d1117"/>
+<rect y="24" width="758" height="10" fill="#0d1117"/>
+<circle cx="18" cy="17.0" r="5.5" fill="#ff5f56"/>
+<circle cx="36" cy="17.0" r="5.5" fill="#ffbd2e"/>
+<circle cx="54" cy="17.0" r="5.5" fill="#27c93f"/>
+<text x="379.0" y="21.5" fill="#8b949e" text-anchor="middle" font-size="12">gnopm publish: live, parked, absent, and one signature for the rest</text>
+<text x="18" y="56" fill="#7ee787">$</text>
+<text x="34.8" y="56" fill="#d2a8ff">gnopm publish -o tx.json -addr g1jg8...sqf5</text>
+<text x="18" y="76" fill="#c9d1d9" xml:space="preserve">chain    test (http://127.0.0.1:26657)</text>
+<text x="18" y="96" fill="#c9d1d9" xml:space="preserve">key      demo</text>
+<text x="18" y="136" fill="#c9d1d9" xml:space="preserve">absent   gno.land/p/demo/math/bignum/v3</text>
+<text x="18" y="156" fill="#8b949e" xml:space="preserve">         295 bytes in 2 file(s), largest bignum.gno at 220</text>
+<text x="18" y="196" fill="#c9d1d9" xml:space="preserve">parked   gno.land/p/demo/orphan/v0</text>
+<text x="18" y="216" fill="#8b949e" xml:space="preserve">         122 bytes in 2 file(s), largest orphan.gno at 52</text>
+<text x="18" y="236" fill="#8b949e" xml:space="preserve">         waiting on an approver; do not send it again</text>
+<text x="18" y="276" fill="#c9d1d9" xml:space="preserve">absent   gno.land/p/demo/set/v0</text>
+<text x="18" y="296" fill="#8b949e" xml:space="preserve">         425 bytes in 2 file(s), largest set.gno at 361</text>
+<text x="18" y="336" fill="#c9d1d9" xml:space="preserve">absent   gno.land/p/demo/table/v1</text>
+<text x="18" y="356" fill="#8b949e" xml:space="preserve">         767 bytes in 2 file(s), largest table.gno at 699</text>
+<text x="18" y="396" fill="#c9d1d9" xml:space="preserve">absent   gno.land/r/demo/board/v0</text>
+<text x="18" y="416" fill="#8b949e" xml:space="preserve">         693 bytes in 3 file(s), largest board.gno at 516</text>
+<text x="18" y="436" fill="#c9d1d9" xml:space="preserve">live     1 package(s) already on chain, nothing to do (-v lists them)</text>
+<text x="18" y="476" fill="#c9d1d9" xml:space="preserve">4 package(s) to publish, in dependency order</text>
+<text x="18" y="516" fill="#c9d1d9" xml:space="preserve">layers   1 dependency layer(s) -&gt; 1 transaction(s) for 4 package(s)</text>
+<text x="18" y="536" fill="#8b949e" xml:space="preserve">         a layer is packages that do not import each other, so one signature covers it</text>
+<text x="18" y="576" fill="#c9d1d9" xml:space="preserve">creator  g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5</text>
+<text x="18" y="616" fill="#c9d1d9" xml:space="preserve">wrote    tx.json (4 message(s))</text>
+<text x="18" y="636" fill="#8b949e" xml:space="preserve">           gno.land/p/demo/math/bignum/v3</text>
+<text x="18" y="656" fill="#8b949e" xml:space="preserve">           gno.land/p/demo/set/v0</text>
+<text x="18" y="676" fill="#8b949e" xml:space="preserve">           gno.land/p/demo/table/v1</text>
+<text x="18" y="696" fill="#8b949e" xml:space="preserve">           gno.land/r/demo/board/v0</text>
+<text x="18" y="716" fill="#8b949e" xml:space="preserve"># (it also writes the two gnokey commands, cut here)</text>
+</svg>
