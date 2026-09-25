@@ -145,17 +145,53 @@ func parseGnomod(b []byte, name string) (module string, ignored bool, err error)
 			if v, e := unquote(strings.TrimSpace(strings.TrimPrefix(rest, "="))); e == nil {
 				module = v
 			}
-		case strings.HasPrefix(line, "ignore"):
-			rest := strings.TrimSpace(strings.TrimPrefix(line, "ignore"))
-			if strings.HasPrefix(rest, "=") {
-				ignored = strings.Contains(strings.ToLower(rest), "true")
-			}
 		}
 	}
 	if module == "" {
 		return "", false, fmt.Errorf("%s: no module declaration", name)
 	}
-	return module, ignored, nil
+	return module, gnomodFlag(b, "ignore"), nil
+}
+
+// gnomodFlag reports whether a gnomod.toml declares a top-level boolean key as
+// true. One owner for the question, because the file is read from three places
+// now: off disk, out of git history, and out of a chain.
+//
+// The comment rule is the whole reason this is a function and not a substring
+// search. A `#` line is dropped before anything is matched, because a package
+// that opts OUT of a flag documents why in prose that contains the flag: a
+// gno-contracts gnomod reads "As private = true the first CreatePool panics",
+// and an unanchored scan takes that sentence for a declaration. That misread
+// produced a four-package false alarm on 2026-09-23; three of the four were
+// comments.
+//
+// A trailing comment on a real declaration is stripped rather than searched,
+// so `ignore = false # was true until v2` is false, which a Contains("true")
+// would have called true.
+func gnomodFlag(b []byte, key string) bool {
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// A table header ends the top level: `private` under `[addpkg]` is a
+		// different key from `private` above it.
+		if strings.HasPrefix(line, "[") {
+			return false
+		}
+		if i := strings.IndexByte(line, '#'); i >= 0 {
+			line = strings.TrimSpace(line[:i])
+		}
+		rest, ok := strings.CutPrefix(line, key)
+		if !ok {
+			continue
+		}
+		rest = strings.TrimSpace(rest)
+		if rest, ok = strings.CutPrefix(rest, "="); ok && strings.EqualFold(strings.TrimSpace(rest), "true") {
+			return true
+		}
+	}
+	return false
 }
 
 // setModuleLine rewrites the module path in a gnomod.toml, touching nothing
