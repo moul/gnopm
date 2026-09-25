@@ -409,6 +409,17 @@ echo "--- gnopm why gno.land/p/demo/table/v0 ---"
 out=$(gnopm why gno.land/p/demo/table/v0 2>&1); echo "$out"
 assert_grep "$out" "gno.land/r/demo/board/v0"
 
+# And it can DOCUMENT a version that has no directory, which no other tool here
+# can: `go doc` reads what is in front of it, and v0 is in front of nobody. The
+# two signatures below are the compatibility diff between the versions.
+echo "--- gnopm doc gno.land/p/demo/table/v0 Rule (no directory) ---"
+old=$(gnopm doc gno.land/p/demo/table/v0 Rule 2>&1); echo "$old"
+assert_grep "$old" "func Rule(width int) string"
+echo "--- gnopm doc gno.land/p/demo/table/v1 Rule (in the tree) ---"
+new=$(gnopm doc gno.land/p/demo/table/v1 Rule 2>&1); echo "$new"
+assert_grep "$new" "func Rule(width int) (string, error)"
+ok "doc reads a version out of the assembly, so a bump's real diff is one command"
+
 # ---------------------------------------------------------------------------
 step "skipping versions, and bumping something with an external dependency"
 
