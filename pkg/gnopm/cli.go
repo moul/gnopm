@@ -333,6 +333,31 @@ verify proves a downloaded dependency exactly as it proves a pinned one.
 			run: cmdGet,
 		},
 		{
+			name:  "vendor",
+			group: "chain",
+			short: "commit the source of every chain dependency into vendor/",
+			long: `Copies each { chain } dependency into vendor/<package-path>/, so this
+repository carries every byte its build uses and needs no chain, no
+cache and no network to build.
+
+It does not touch gnomod.lock. The entry stays { chain }, which keeps
+the two things worth keeping: which chain the bytes came from, and the
+hash that proves they are the right ones. So vendoring is not a
+different kind of dependency, it is the same dependency with a local
+copy, and verify proves it either way.
+
+The fill order is vendor/, then the shared download cache, then the
+chain. Unvendoring is deleting the directory: sync falls back.
+
+Vendored packages are not yours to bump or publish, and gnopm treats
+them that way: the workspace scan does not descend into vendor/, so
+nothing there is ever mistaken for a package you own.
+
+Takes no arguments. A tree that needs a chain for some of its
+dependencies still needs a chain, so there is no partial vendoring.`,
+			run: cmdVendor,
+		},
+		{
 			name: "why", args: "<module>",
 			group:            "inspect",
 			completesModules: true,

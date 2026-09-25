@@ -30,6 +30,21 @@ func Install(e *Env) error {
 	}
 
 	want := materializedEntries(lock)
+	// A chain dependency that is vendored is already resolvable where it
+	// stands, so it must NOT also be materialized: two directories under the
+	// workspace root declaring one module path is the ambiguity every other
+	// guard here exists to prevent. Dropping it from want also makes
+	// pruneAssembly delete a copy left over from before it was vendored.
+	{
+		keep := want[:0]
+		for _, en := range want {
+			if en.Source.Variant() == "chain" && vendored(root, en.Module, en.Hash) {
+				continue
+			}
+			keep = append(keep, en)
+		}
+		want = keep
+	}
 	// A module cannot be in two places at once. Two packages declaring the
 	// same module path is the one way to make the toolchain's resolution
 	// ambiguous, and it is exactly what the migration risks in the window
@@ -41,7 +56,12 @@ func Install(e *Env) error {
 		}
 	}
 
-	stamp := hashString(lock.String())
+	// The stamp is what makes install a no-op on an up-to-date tree, so it has
+	// to cover everything that decides what the assembly should hold. Vendoring
+	// changes that without changing the lock by design, so a stamp over the
+	// lock alone made `gnopm vendor` leave the old assembly copy in place, and
+	// would have made deleting vendor/ fail to bring it back.
+	stamp := hashString(lock.String() + vendoredSignature(root, lock))
 	asm := filepath.Join(root, assemblyDir)
 	if cur, err := os.ReadFile(filepath.Join(asm, stampFile)); err == nil && strings.TrimSpace(string(cur)) == stamp {
 		return nil
@@ -307,10 +327,16 @@ func VerifyWith(e *Env, upstream string) error {
 		// cannot redefine a published path, so bytes that hash right are the
 		// bytes that were locked.
 		if e.Source.Variant() == "chain" {
-			dest := filepath.Join(root, assemblyDir, filepath.FromSlash(e.Module))
+			// vendor/ first, because that is where the bytes are when a
+			// workspace has been made self-contained, and the assembly
+			// deliberately holds no copy of a vendored package.
+			dest := vendorPathOf(root, e.Module)
+			if _, err := os.Stat(dest); err != nil {
+				dest = filepath.Join(root, assemblyDir, filepath.FromSlash(e.Module))
+			}
 			h, err := hashDownloaded(dest)
 			if err != nil {
-				fmt.Fprintf(w, "  %s: not materialized, so it cannot be proved here. Run `gnopm sync`\n", e.Module)
+				fmt.Fprintf(w, "  %s: neither vendored nor materialized, so it cannot be proved here. Run `gnopm sync`\n", e.Module)
 				bad++
 				continue
 			}

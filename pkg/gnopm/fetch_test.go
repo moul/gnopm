@@ -201,3 +201,132 @@ func TestChainIDMismatchIsRefused(t *testing.T) {
 		t.Errorf("unhelpful error: %v", err)
 	}
 }
+
+// TestVendorMakesTheWorkspaceSelfContained is stage 2 of #53.
+//
+// The assertion that carries it is the last one: the chain is closed AND the
+// download cache is emptied, and the workspace still syncs and verifies. Either
+// one alone would pass against a gnopm that had quietly fallen back to the
+// other, which is exactly the bug vendoring exists to make impossible.
+func TestVendorMakesTheWorkspaceSelfContained(t *testing.T) {
+	root, f, cache := chainWorkspace(t)
+	if _, errb, err := runGet(t, root, cache, f.srv.URL, "gno.land/p/nt/tinyavl/v0"); err != nil {
+		t.Fatalf("get: %v\n%s", err, errb)
+	}
+
+	t.Setenv(cacheEnv, cache)
+	var out, errb bytes.Buffer
+	if err := Run([]string{"vendor", "-C", root}, &out, &errb); err != nil {
+		t.Fatalf("vendor: %v\n%s", err, errb.String())
+	}
+
+	// The bytes are committed source now, at a path that says what they are.
+	got := read(t, filepath.Join(root, vendorDir, "gno.land/p/nt/tinyavl/v0/tinyavl.gno"))
+	if want := "package tinyavl\n\nfunc Get(k string) string { return k }\n"; got != want {
+		t.Errorf("vendored source is wrong:\n got: %q\nwant: %q", got, want)
+	}
+
+	// And the assembly copy is gone. Two directories under the workspace root
+	// declaring one module path is the ambiguity every other guard here exists
+	// to prevent, so vendoring must not create one.
+	if _, err := os.Stat(filepath.Join(root, assemblyDir, "gno.land/p/nt/tinyavl/v0")); !os.IsNotExist(err) {
+		t.Errorf("the assembly still holds a copy of a vendored package: %v", err)
+	}
+
+	// The lock is untouched: still { chain }, still carrying the provenance
+	// and the hash. Vendoring is not a different kind of dependency.
+	en := mustByModule(t, root)["gno.land/p/nt/tinyavl/v0"]
+	if en.Source.Variant() != "chain" || en.Source.Chain != "test" {
+		t.Errorf("vendoring rewrote the lock: %+v", en.Source)
+	}
+
+	// Now take away everything else there is.
+	f.srv.Close()
+	if err := os.RemoveAll(filepath.Join(cache, downloadSubdir)); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, root, "sync")
+	mustRun(t, root, "verify")
+	if s := mustRun(t, root, "status"); !strings.Contains(s, "up to date") {
+		t.Fatalf("a vendored workspace is not settled:\n%s", s)
+	}
+}
+
+// TestVendoredSourceIsStillProved: vendor/ is committed, so it is exactly the
+// place somebody can edit by hand or mis-merge. The lock's hash is what keeps
+// it honest, and it has to apply to the vendored copy and not only to a
+// downloaded one.
+func TestVendoredSourceIsStillProved(t *testing.T) {
+	root, f, cache := chainWorkspace(t)
+	if _, errb, err := runGet(t, root, cache, f.srv.URL, "gno.land/p/nt/tinyavl/v0"); err != nil {
+		t.Fatalf("get: %v\n%s", err, errb)
+	}
+	t.Setenv(cacheEnv, cache)
+	var out, errb bytes.Buffer
+	if err := Run([]string{"vendor", "-C", root}, &out, &errb); err != nil {
+		t.Fatalf("vendor: %v\n%s", err, errb.String())
+	}
+
+	p := filepath.Join(root, vendorDir, "gno.land/p/nt/tinyavl/v0/tinyavl.gno")
+	write(t, p, read(t, p)+"\n// edited in vendor/\n")
+
+	var vout, verr bytes.Buffer
+	if err := Run([]string{"verify", "-C", root}, &vout, &verr); err == nil {
+		t.Fatal("verify accepted a hand-edited vendored dependency")
+	}
+	if got := verr.String(); !strings.Contains(got, "hashes to") {
+		t.Errorf("verify did not say what was wrong:\n%s", got)
+	}
+}
+
+// TestVendorSaysSoWhenThereIsNothingToDo. A command that prints nothing on a
+// workspace it cannot help is a command people run twice and then distrust.
+func TestVendorWithNoChainDependencies(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "p/a", "gno.land/p/a/v0", "package a\n")
+	commit(t, root, "initial")
+	mustRun(t, root, "sync")
+
+	var out, errb bytes.Buffer
+	if err := Run([]string{"vendor", "-C", root}, &out, &errb); err != nil {
+		t.Fatalf("vendor: %v", err)
+	}
+	if !strings.Contains(errb.String(), "nothing to vendor") {
+		t.Errorf("vendor was silent about having nothing to do:\n%s", errb.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, vendorDir)); !os.IsNotExist(err) {
+		t.Error("vendor created an empty vendor/ directory")
+	}
+}
+
+// TestUnvendoringFallsBack is the other direction, and the one the assembly
+// stamp made fail.
+//
+// Vendoring changes what the assembly should hold without changing the lock, so
+// a stamp over the lock alone said "already up to date" and install did
+// nothing. Deleting vendor/ then left a workspace that resolved nothing and
+// whose own status called itself fine.
+func TestUnvendoringFallsBack(t *testing.T) {
+	root, f, cache := chainWorkspace(t)
+	if _, errb, err := runGet(t, root, cache, f.srv.URL, "gno.land/p/nt/tinyavl/v0"); err != nil {
+		t.Fatalf("get: %v\n%s", err, errb)
+	}
+	t.Setenv(cacheEnv, cache)
+	var out, errb bytes.Buffer
+	if err := Run([]string{"vendor", "-C", root}, &out, &errb); err != nil {
+		t.Fatalf("vendor: %v\n%s", err, errb.String())
+	}
+
+	// Unvendoring is deleting the directory, which the command's own output
+	// tells you. The chain stays closed: the cache must be enough.
+	f.srv.Close()
+	if err := os.RemoveAll(filepath.Join(root, vendorDir)); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, root, "sync")
+
+	if _, err := os.Stat(filepath.Join(root, assemblyDir, "gno.land/p/nt/tinyavl/v0/tinyavl.gno")); err != nil {
+		t.Fatalf("sync did not bring the assembly copy back: %v", err)
+	}
+	mustRun(t, root, "verify")
+}

@@ -147,6 +147,27 @@ typed, so `sync` will fetch what the lock already names and will never add an
 entry. A `sync` whose downloads are already cached **makes no network call at
 all**, which is what keeps a local-only workspace local.
 
+### `gnopm vendor`, when the repository should carry every byte
+
+```sh
+gnopm vendor     # writes vendor/gno.land/p/nt/tinyavl/v0/, then commit it
+```
+
+**It does not touch the lock.** The entry stays `{ chain }`, which keeps the two
+things worth keeping: which chain the bytes came from, and the hash that proves
+they are the right ones. So a vendored dependency is not a different kind of
+dependency, it is the same one with a local copy, and `verify` proves it either
+way, including after somebody hand-edits `vendor/`.
+
+The fill order is **`vendor/`, then the download cache, then the chain**, so a
+vendored workspace builds with no network, no cache and no chain. Unvendoring is
+deleting the directory; `sync` falls back.
+
+Rewriting the entry to `{ dir = "vendor/..." }` would have been the obvious
+design and is wrong twice: the workspace scan deliberately does not descend into
+`vendor/`, because vendored code is not yours to bump or publish, and it would
+throw the provenance away.
+
 ### Why there is no resolver here, and never will be
 
 npm, pip and apt are a registry plus a constraint solver. gnopm is neither, and
