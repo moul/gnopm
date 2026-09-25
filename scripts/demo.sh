@@ -727,7 +727,13 @@ still carrying its old signature, for the realm that still imports it.
 
 ## Try it
 
+**Clone this and run `gnopm sync` first.** `.gnopm/` is gitignored, because
+nothing in it is source, so a fresh clone has the lock but not yet the
+superseded versions it points at. `sync` rebuilds them from the commits recorded
+in `gnomod.lock`, byte for byte, and everything below then has an answer.
+
 ```
+gnopm sync            # rebuild the versions that have no directory
 gnopm status          # what resolves, and whether anything is out of date
 gnopm ls              # every module and where its source is
 gnopm ls -pinned      # just the ones with no directory any more
