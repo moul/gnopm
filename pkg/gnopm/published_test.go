@@ -26,6 +26,9 @@ type fakeChain struct {
 	srv *httptest.Server
 	// live and parked are module paths. Anything else is absent.
 	live, parked map[string]bool
+	// private is the subset of live whose published gnomod.toml declares
+	// private = true, which is what CheckPrivate compares the tree against.
+	private map[string]bool
 	// noInert makes vm/qinertpaths answer the way a chain without the
 	// submission policy does: an error, not an empty list.
 	noInert bool
@@ -57,7 +60,7 @@ func newFakeChain(t *testing.T) *fakeChain {
 	// would make the next test's "v0 is absent" pass or fail depending on what
 	// ran before it, and `go test` would write to a developer's home.
 	t.Setenv(cacheEnv, t.TempDir())
-	f := &fakeChain{live: map[string]bool{}, parked: map[string]bool{}}
+	f := &fakeChain{live: map[string]bool{}, parked: map[string]bool{}, private: map[string]bool{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.calls++
@@ -100,6 +103,24 @@ func newFakeChain(t *testing.T) *fakeChain {
 			writeABCIData(w, strings.Join(paths, "\n"))
 		case "vm/qfile":
 			p := string(req.Params.Data)
+			// `<path>/gnomod.toml` is the one body read rather than counted:
+			// a published package's flags are only knowable from the file the
+			// chain stored, not from the fact that the path resolves.
+			if base, isFile := strings.CutSuffix(p, "/gnomod.toml"); isFile {
+				f.mu.Lock()
+				isLive, isPrivate := f.live[base], f.private[base]
+				f.mu.Unlock()
+				if isLive {
+					body := "module = \"" + base + "\"\ngno = \"0.9\"\n"
+					if isPrivate {
+						body += "private = true\n"
+					}
+					writeABCIData(w, body)
+					return
+				}
+				writeABCIError(w, "/vm.InvalidPkgPathError", "invalid package path - package not found: "+p)
+				return
+			}
 			f.mu.Lock()
 			isLive := f.live[p]
 			f.mu.Unlock()

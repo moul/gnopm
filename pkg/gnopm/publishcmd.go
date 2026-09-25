@@ -227,6 +227,21 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 		plans = append(plans, pl)
 	}
 
+	// Every package already on chain, which is the only set whose declared
+	// `private` can be compared against anything. See privatecheck.go for why
+	// a flag that is merely wrong, on a package publish will not touch, is
+	// still worth stopping the run for.
+	var livePkgs []Package
+	for _, pl := range plans {
+		if pl.state == StateLive {
+			livePkgs = append(livePkgs, pl.pkg)
+		}
+	}
+	mismatched, err := CheckPrivate(e, chain, e.Root, livePkgs)
+	if err != nil {
+		return err
+	}
+
 	// The report goes to stderr, so that under -print stdout carries only the
 	// script and under a real run it carries only the client's own output.
 	// Nothing here is either.
@@ -294,9 +309,23 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 		e.logf("live     %d package(s) already on chain, nothing to do (-v lists them)\n", live)
 	}
 
+	for _, m := range mismatched {
+		e.logf("\nPRIVATE  %s\n", m.module)
+		e.logf("         %s\n", m.why())
+	}
+
 	if blocked > 0 {
 		return fmt.Errorf("%d package(s) blocked: a dependency named above is not live, "+
 			"and nothing in this workspace can publish it", blocked)
+	}
+
+	// Refused rather than warned. The flag cannot be corrected on chain, so the
+	// only repair is to fix the repo or cut a new version, and a warning on a
+	// command that then succeeds is a warning nobody comes back to.
+	if n := len(mismatched); n > 0 {
+		return fmt.Errorf("%d package(s) declare a private flag the chain does not hold: "+
+			"the flag binds at the first publish and cannot be changed after, so fix the "+
+			"gnomod.toml to match what is on chain, or publish a new version", n)
 	}
 	if todo == 0 {
 		e.logf("\nnothing to publish\n")
