@@ -100,6 +100,21 @@ p/alice/md/md.gno          edited in place</code></pre>
 </figure>
 
 <figure>
+  <img class="shot" src="img/doc.svg" alt="gnopm doc on a version that has no directory, and the two signatures of a bump side by side">
+  <figcaption><code>gnopm doc</code> documents a version that has no directory anywhere, which
+  is the one somebody is asking about when they meet an old import. Put the two signatures of a
+  bump next to each other and that IS the compatibility diff. No gno toolchain needed: gno
+  source is Go syntax, so the standard library parses it.</figcaption>
+</figure>
+
+<figure>
+  <img class="shot" src="img/publish.svg" alt="gnopm publish showing live, parked and absent packages">
+  <figcaption><code>publish</code> says what is live, parked or absent on the chain your paths
+  point at, and sends the rest in dependency order. It holds no key and signs nothing: gnokey
+  does, and it prompts you.</figcaption>
+</figure>
+
+<figure>
   <img class="shot" src="img/verify.svg" alt="gnopm verify refusing a pin that a squash merge would strand">
   <figcaption>Most repositories squash-merge, so a version pinned to a branch commit stops
   resolving the moment the change lands. <code>verify</code> catches that while it is still
@@ -139,8 +154,11 @@ gnopm sync        # make the state good
 gnopm bump md     # promote a package, in place; then edit the files
 gnopm unbump md   # take a number back, while nothing has published it
 gnopm ls          # every module and where its source is
+gnopm doc md      # the documentation, for any version, directory or not
+gnopm why md/v0   # who still imports this version
 gnopm verify      # prove every pinned version still reproduces (for CI)
-gnopm tidy        # make the whole workspace right, chain included</code></pre>
+gnopm tidy        # make the whole workspace right, chain included
+gnopm publish     # what is missing on chain, in dependency order</code></pre>
 
 <h2>A version number is a tag, not a counter</h2>
 <p>A number only means something once the version is published: until then it names no bytes,

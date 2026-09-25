@@ -138,13 +138,9 @@ lock: a superseded version is pinned to history and materialized on demand, and
 it is exactly the version somebody is asking about when they meet an old import.
 So the compatibility diff of a bump is two commands:
 
-```
-$ gnopm doc gno.land/p/demo/table/v0 Rule     # no directory anywhere
-func Rule(width int) string
-
-$ gnopm doc gno.land/p/demo/table/v1 Rule
-func Rule(width int) (string, error)
-```
+<p align="center">
+  <img src="docs/img/doc.svg" alt="gnopm doc on a version that has no directory, and the two signatures of a bump side by side" width="800">
+</p>
 
 **It needs no gno toolchain.** gno source is Go syntax, so the standard library
 parses it: measured against gno master on 2026-09-25, 1517 of 1517 `.gno` files

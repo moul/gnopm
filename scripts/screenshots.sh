@@ -96,6 +96,20 @@ git -C "$old" -c commit.gpgsign=false commit -q -m "the old layout"
   gnopm ls 2>&1 | grep -E 'MODULE|table'
 } | svg "gnopm why: the importer with no directory" why.svg
 
+# 7b. doc, on the thing `go doc` structurally cannot do: document a version
+#     that has no directory anywhere, and put the two signatures of a bump next
+#     to each other. That IS the compatibility diff.
+{
+  echo '$ gnopm doc p/demo/strs/v1'
+  gnopm doc p/demo/strs/v1 2>&1
+  echo ''
+  echo '$ gnopm doc gno.land/p/demo/table/v0 Rule'
+  gnopm doc gno.land/p/demo/table/v0 Rule 2>&1
+  echo ''
+  echo '$ gnopm doc gno.land/p/demo/table/v1 Rule'
+  gnopm doc gno.land/p/demo/table/v1 Rule 2>&1
+} | svg "gnopm doc: the bump, as the two signatures side by side" doc.svg
+
 # 8. tidy, offline: the pass that finds a version number spent on nothing.
 #    -offline because this script runs with no network, by the same rule that
 #    keeps the demo a real integration test.

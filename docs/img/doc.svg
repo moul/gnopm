@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="783" height="470" viewBox="0 0 783 470" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13">
+<rect width="783" height="470" rx="10" fill="#11131a"/>
+<rect width="783" height="34" rx="10" fill="#0d1117"/>
+<rect y="24" width="783" height="10" fill="#0d1117"/>
+<circle cx="18" cy="17.0" r="5.5" fill="#ff5f56"/>
+<circle cx="36" cy="17.0" r="5.5" fill="#ffbd2e"/>
+<circle cx="54" cy="17.0" r="5.5" fill="#27c93f"/>
+<text x="391.5" y="21.5" fill="#8b949e" text-anchor="middle" font-size="12">gnopm doc: the bump, as the two signatures side by side</text>
+<text x="18" y="56" fill="#7ee787">$</text>
+<text x="34.8" y="56" fill="#d2a8ff">gnopm doc p/demo/strs/v1</text>
+<text x="18" y="76" fill="#c9d1d9" xml:space="preserve">package strs // import &quot;gno.land/p/demo/strs/v1&quot;</text>
+<text x="18" y="116" fill="#8b949e" xml:space="preserve">    Package strs is a leaf: it imports nothing.</text>
+<text x="18" y="156" fill="#c9d1d9" xml:space="preserve">func Repeat(s string, n int) (string, error)</text>
+<text x="18" y="196" fill="#7ee787">$</text>
+<text x="34.8" y="196" fill="#d2a8ff">gnopm doc gno.land/p/demo/table/v0 Rule</text>
+<text x="18" y="216" fill="#c9d1d9" xml:space="preserve">gno.land/p/demo/table/v0 has no directory: read from the assembly, pinned at 4cf5f5ac334c</text>
+<text x="18" y="236" fill="#c9d1d9" xml:space="preserve">func Rule(width int) string</text>
+<text x="18" y="276" fill="#8b949e" xml:space="preserve">    Rule returns a horizontal rule of the given width.</text>
+<text x="18" y="316" fill="#7ee787">$</text>
+<text x="34.8" y="316" fill="#d2a8ff">gnopm doc gno.land/p/demo/table/v1 Rule</text>
+<text x="18" y="336" fill="#c9d1d9" xml:space="preserve">func Rule(width int) (string, error)</text>
+<text x="18" y="376" fill="#8b949e" xml:space="preserve">    Rule returns a horizontal rule of the given width.</text>
+<text x="18" y="416" fill="#8b949e" xml:space="preserve">    v1 CHANGED: it moved to strs/v1, whose Repeat returns an error, so Rule now</text>
+<text x="18" y="436" fill="#8b949e" xml:space="preserve">    returns one too. This is the diff a reviewer needs, and here it IS the diff.</text>
+</svg>
