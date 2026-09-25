@@ -120,6 +120,42 @@ superseded version importing an older one is how a chain of versions stays
 alive, and that importer has no directory for grep to find. Grep would tell you
 the version is safe to drop.
 
+## `gnopm doc`, including the version nobody has
+
+Documentation as a first-class command, the way `go doc` is.
+
+```sh
+gnopm doc                       # the package you are standing in
+gnopm doc p/alice/md/v1         # one package
+gnopm doc p/alice/md/v1 Bold    # one symbol, with its full doc
+gnopm doc p/alice/md/v1 Builder # a type, and its methods
+```
+
+Two things make it more than `go doc` on a directory.
+
+**It documents a version with no directory.** That is the whole point of the
+lock: a superseded version is pinned to history and materialized on demand, and
+it is exactly the version somebody is asking about when they meet an old import.
+So the compatibility diff of a bump is two commands:
+
+```
+$ gnopm doc gno.land/p/demo/table/v0 Rule     # no directory anywhere
+func Rule(width int) string
+
+$ gnopm doc gno.land/p/demo/table/v1 Rule
+func Rule(width int) (string, error)
+```
+
+**It needs no gno toolchain.** gno source is Go syntax, so the standard library
+parses it: measured against gno master on 2026-09-25, 1517 of 1517 `.gno` files
+under `examples/` parse, and across `examples`, `stdlibs` and
+[moul/gno-contracts](https://github.com/moul/gno-contracts) 3580 of 3590, where
+the only ten failures are gnovm's deliberately invalid fixtures. Nothing here
+type-checks, and nothing needs to: a signature and a doc comment are syntax.
+
+`-u` includes unexported declarations, as `go doc -u` does. Test files are
+excluded, as `go doc` excludes them.
+
 ## A version number is a tag, not a counter
 
 A number only means something once the version is published: until then it names

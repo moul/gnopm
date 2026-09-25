@@ -251,6 +251,42 @@ substring against the module path or its directory.
 			run: cmdLs,
 		},
 		{
+			name: "doc", args: "[package] [symbol]",
+			group:            "inspect",
+			completesModules: true,
+			records:          true,
+			short:            "the documentation for a package, version included",
+			long: `Documentation as a first-class command, the way ` + "`go doc`" + ` is.
+
+  gnopm doc                       the package you are standing in
+  gnopm doc p/alice/md/v1         one package
+  gnopm doc p/alice/md/v1 Bold    one symbol
+  gnopm doc p/alice/md/v1 Builder a type, and its methods
+
+Two things make this more than ` + "`go doc`" + ` on a directory.
+
+It documents a version that has NO directory. That is the whole point of
+the lock: a superseded version is pinned to history and materialized on
+demand, and it is exactly the version somebody is asking about when they
+find an old import. ` + "`gnopm sync`" + ` has to have materialized it first.
+
+And it needs no gno toolchain. gno source is Go syntax, so the standard
+library parses it. Nothing here type-checks, and nothing needs to: a
+signature and a doc comment are syntax.
+
+The package is resolved against the lock, so it takes a module path, a
+directory, or any unambiguous part of one. Test files are excluded, as
+go doc excludes them.
+
+  -u      include unexported declarations, as ` + "`go doc -u`" + ` does
+  -json   every declaration as a record
+  -f      go-template over each declaration`,
+			flags: func(fs *flag.FlagSet) {
+				fs.Bool("u", false, "include unexported declarations")
+			},
+			run: cmdDoc,
+		},
+		{
 			name: "why", args: "<module>",
 			group:            "inspect",
 			completesModules: true,
