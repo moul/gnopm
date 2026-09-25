@@ -260,7 +260,16 @@ func fillFromChain(e *Env, entries []LockEntry, dests []string) error {
 	// chain should pay for it once.
 	chains := map[string]*Chain{}
 	for i, en := range entries {
-		// The cache answers first, and that is principle 8 rather than an
+		// vendor/ is checked before the cache and before any discovery: a
+		// vendored workspace is meant to build with no chain, no cache and no
+		// network, and Install has already dropped vendored entries from the
+		// list it materializes, so reaching here at all means it is not
+		// vendored. Checked anyway, cheaply, because the two must never
+		// disagree about what counts as vendored.
+		if vendored(e.Root, en.Module, en.Hash) {
+			continue
+		}
+		// The cache answers next, and that is principle 8 rather than an
 		// optimisation: a workspace whose dependencies are all already
 		// downloaded must complete with no network at all, so discovery does
 		// not even happen unless something actually has to be fetched.
