@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="775" height="930" viewBox="0 0 775 930" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13">
-<rect width="775" height="930" rx="10" fill="#11131a"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="775" height="950" viewBox="0 0 775 950" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13">
+<rect width="775" height="950" rx="10" fill="#11131a"/>
 <rect width="775" height="34" rx="10" fill="#0d1117"/>
 <rect y="24" width="775" height="10" fill="#0d1117"/>
 <circle cx="18" cy="17.0" r="5.5" fill="#ff5f56"/>
@@ -15,31 +15,32 @@
 <text x="18" y="196" fill="#8b949e" xml:space="preserve">  sync        make the state good: lock the tree, pin what left it, materialize the rest</text>
 <text x="18" y="216" fill="#8b949e" xml:space="preserve">  bump        promote a package to its next version, in place</text>
 <text x="18" y="236" fill="#8b949e" xml:space="preserve">  unbump      fold an unpublished version back into the one before it</text>
-<text x="18" y="276" fill="#c9d1d9" xml:space="preserve">inspect: read-only questions about this workspace</text>
-<text x="18" y="296" fill="#8b949e" xml:space="preserve">  ls          list resolvable modules and where their source is</text>
-<text x="18" y="316" fill="#8b949e" xml:space="preserve">  doc         the documentation for a package, version included</text>
-<text x="18" y="336" fill="#8b949e" xml:space="preserve">  why         who still imports this version</text>
-<text x="18" y="356" fill="#8b949e" xml:space="preserve">  graph       the dependency graph, as graphviz DOT</text>
-<text x="18" y="376" fill="#8b949e" xml:space="preserve">  env         show what gnopm worked out about this workspace</text>
-<text x="18" y="396" fill="#8b949e" xml:space="preserve">  version     print the gnopm version</text>
-<text x="18" y="416" fill="#8b949e" xml:space="preserve">  badges      shields.io badges describing this workspace</text>
-<text x="18" y="456" fill="#c9d1d9" xml:space="preserve">chain: what is deployed, and what it would take to deploy the rest</text>
-<text x="18" y="476" fill="#8b949e" xml:space="preserve">  publish     publish what is missing on the chain, in dependency order</text>
-<text x="18" y="516" fill="#c9d1d9" xml:space="preserve">prove and repair: the guards, and the commands that fix what they find</text>
-<text x="18" y="536" fill="#8b949e" xml:space="preserve">  merge-lock  resolve a conflicted gnomod.lock, then sync</text>
-<text x="18" y="556" fill="#8b949e" xml:space="preserve">  verify      prove every pinned version still reproduces (the CI guard)</text>
-<text x="18" y="576" fill="#8b949e" xml:space="preserve">  tidy        make the whole workspace right, however long it takes</text>
-<text x="18" y="596" fill="#8b949e" xml:space="preserve">  clean       remove what gnopm generated and can rebuild</text>
-<text x="18" y="616" fill="#8b949e" xml:space="preserve">  deversion   one-time migration: lift every pkg/vN directory up to pkg</text>
-<text x="18" y="656" fill="#c9d1d9" xml:space="preserve">automation: for CI, editors and shells</text>
-<text x="18" y="676" fill="#8b949e" xml:space="preserve">  completion  print the shell completion script</text>
-<text x="18" y="696" fill="#8b949e" xml:space="preserve">  tool        run a gnopm tool: `ci` checks a repository and reports</text>
-<text x="18" y="736" fill="#c9d1d9" xml:space="preserve">global options, before or after the command name:</text>
-<text x="18" y="756" fill="#8b949e" xml:space="preserve">  -C &lt;dir&gt;    run as if started in &lt;dir&gt;</text>
-<text x="18" y="776" fill="#8b949e" xml:space="preserve">  -q          terse output, module paths only where that makes sense</text>
-<text x="18" y="796" fill="#8b949e" xml:space="preserve">  -json       machine-readable output</text>
-<text x="18" y="816" fill="#8b949e" xml:space="preserve">  -f &lt;tmpl&gt;   go-template over each record, as `gno list -f` does</text>
-<text x="18" y="836" fill="#8b949e" xml:space="preserve">  -v          say what is being checked, and where each answer came from</text>
-<text x="18" y="856" fill="#8b949e" xml:space="preserve">  -no-cache   ask the chain everything, ignoring ~/.gnopm</text>
-<text x="18" y="896" fill="#c9d1d9" xml:space="preserve">`gnopm help &lt;command&gt;` for detail. Start with `gnopm status`.</text>
+<text x="18" y="256" fill="#8b949e" xml:space="preserve">  get         fetch a dependency that lives only on a chain</text>
+<text x="18" y="296" fill="#c9d1d9" xml:space="preserve">inspect: read-only questions about this workspace</text>
+<text x="18" y="316" fill="#8b949e" xml:space="preserve">  ls          list resolvable modules and where their source is</text>
+<text x="18" y="336" fill="#8b949e" xml:space="preserve">  doc         the documentation for a package, version included</text>
+<text x="18" y="356" fill="#8b949e" xml:space="preserve">  why         who still imports this version</text>
+<text x="18" y="376" fill="#8b949e" xml:space="preserve">  graph       the dependency graph, as graphviz DOT</text>
+<text x="18" y="396" fill="#8b949e" xml:space="preserve">  env         show what gnopm worked out about this workspace</text>
+<text x="18" y="416" fill="#8b949e" xml:space="preserve">  version     print the gnopm version</text>
+<text x="18" y="436" fill="#8b949e" xml:space="preserve">  badges      shields.io badges describing this workspace</text>
+<text x="18" y="476" fill="#c9d1d9" xml:space="preserve">chain: what is deployed, and what it would take to deploy the rest</text>
+<text x="18" y="496" fill="#8b949e" xml:space="preserve">  publish     publish what is missing on the chain, in dependency order</text>
+<text x="18" y="536" fill="#c9d1d9" xml:space="preserve">prove and repair: the guards, and the commands that fix what they find</text>
+<text x="18" y="556" fill="#8b949e" xml:space="preserve">  merge-lock  resolve a conflicted gnomod.lock, then sync</text>
+<text x="18" y="576" fill="#8b949e" xml:space="preserve">  verify      prove every pinned version still reproduces (the CI guard)</text>
+<text x="18" y="596" fill="#8b949e" xml:space="preserve">  tidy        make the whole workspace right, however long it takes</text>
+<text x="18" y="616" fill="#8b949e" xml:space="preserve">  clean       remove what gnopm generated and can rebuild</text>
+<text x="18" y="636" fill="#8b949e" xml:space="preserve">  deversion   one-time migration: lift every pkg/vN directory up to pkg</text>
+<text x="18" y="676" fill="#c9d1d9" xml:space="preserve">automation: for CI, editors and shells</text>
+<text x="18" y="696" fill="#8b949e" xml:space="preserve">  completion  print the shell completion script</text>
+<text x="18" y="716" fill="#8b949e" xml:space="preserve">  tool        run a gnopm tool: `ci` checks a repository and reports</text>
+<text x="18" y="756" fill="#c9d1d9" xml:space="preserve">global options, before or after the command name:</text>
+<text x="18" y="776" fill="#8b949e" xml:space="preserve">  -C &lt;dir&gt;    run as if started in &lt;dir&gt;</text>
+<text x="18" y="796" fill="#8b949e" xml:space="preserve">  -q          terse output, module paths only where that makes sense</text>
+<text x="18" y="816" fill="#8b949e" xml:space="preserve">  -json       machine-readable output</text>
+<text x="18" y="836" fill="#8b949e" xml:space="preserve">  -f &lt;tmpl&gt;   go-template over each record, as `gno list -f` does</text>
+<text x="18" y="856" fill="#8b949e" xml:space="preserve">  -v          say what is being checked, and where each answer came from</text>
+<text x="18" y="876" fill="#8b949e" xml:space="preserve">  -no-cache   ask the chain everything, ignoring ~/.gnopm</text>
+<text x="18" y="916" fill="#c9d1d9" xml:space="preserve">`gnopm help &lt;command&gt;` for detail. Start with `gnopm status`.</text>
 </svg>

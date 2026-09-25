@@ -112,7 +112,7 @@ func TestJSONShapeUnchanged(t *testing.T) {
 		want []string
 	}{
 		{"status", []string{"status"}, []string{"modules", "tree", "pinned", "ok", "lock", "assembly"}},
-		{"env", []string{"env"}, []string{"GNOPM_ROOT", "GNOPM_LOCK", "GNOPM_ASSEMBLY", "GNOPM_UPSTREAM", "GNOPM_CACHE", "GNOHOME"}},
+		{"env", []string{"env"}, []string{"GNOPM_ROOT", "GNOPM_LOCK", "GNOPM_ASSEMBLY", "GNOPM_UPSTREAM", "GNOPM_CACHE", "GNOPM_DOWNLOAD", "GNOHOME"}},
 		{"version", []string{"version"}, []string{"version", "revision", "dirty"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -46,6 +46,11 @@ type EnvRecord struct {
 	Assembly string `json:"GNOPM_ASSEMBLY"`
 	Upstream string `json:"GNOPM_UPSTREAM"`
 	Cache    string `json:"GNOPM_CACHE"`
+	// Download is where fetched dependencies land under the cache. Printed
+	// separately because it is the one part of the cache that holds source
+	// rather than answers, so it is what somebody looks for when they want to
+	// read what a dependency actually contains.
+	Download string `json:"GNOPM_DOWNLOAD"`
 	GnoHome  string `json:"GNOHOME"`
 }
 

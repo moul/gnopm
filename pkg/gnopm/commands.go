@@ -44,7 +44,7 @@ func Status(e *Env) error {
 		return e.emit(rec)
 	}
 
-	e.printf("%d modules   %d in tree   %d pinned to history\n", len(lock.Modules), len(pkgs), len(pinned))
+	e.printf("%d modules   %d in tree   %s\n", len(lock.Modules), len(pkgs), offTreeSummary(pinned))
 	if len(lock.Modules) == 0 {
 		e.printf("\nno %s yet. run `gnopm sync`\n", lockFile)
 		return nil
@@ -146,9 +146,14 @@ func cmdLs(e *Env, fs *flag.FlagSet, args []string) error {
 	for _, m := range rows {
 		loc := m.Source.Dir
 		kind := "tree"
-		if !m.Source.InTree() {
-			kind = "history"
-			loc = short(m.Source.Commit) + ":" + m.Source.Dir
+		switch m.Source.Variant() {
+		case "commit":
+			kind, loc = "history", short(m.Source.Commit)+":"+m.Source.Dir
+		case "chain":
+			// No commit and no dir, so the old formatting printed a bare ":".
+			// What locates a chain package is which chain, and the module path
+			// already in the first column.
+			kind, loc = "chain", m.Source.Chain
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\n", m.Module, kind, loc)
 	}
@@ -201,8 +206,8 @@ func Relock(e *Env) error {
 		return err
 	}
 	if changed {
-		e.logf("%s updated: %d modules (%d in tree, %d pinned to history)\n",
-			lockFile, len(next.Modules), len(pkgs), len(next.Modules)-len(pkgs))
+		e.logf("%s updated: %d modules (%d in tree, %s)\n",
+			lockFile, len(next.Modules), len(pkgs), offTreeSummary(materializedEntries(next)))
 	}
 	return nil
 }
@@ -303,6 +308,7 @@ func cmdEnv(e *Env) error {
 		Assembly: filepath.Join(e.Root, assemblyDir),
 		Upstream: upstream,
 		Cache:    cache,
+		Download: downloadRoot(cache),
 		GnoHome:  gnoHome(),
 	}
 	if e.JSON {
@@ -317,6 +323,7 @@ func cmdEnv(e *Env) error {
 		{"GNOPM_ASSEMBLY", rec.Assembly},
 		{"GNOPM_UPSTREAM", rec.Upstream},
 		{"GNOPM_CACHE", rec.Cache},
+		{"GNOPM_DOWNLOAD", rec.Download},
 		{"GNOHOME", rec.GnoHome},
 	} {
 		e.printf("%s=%q\n", kv[0], kv[1])
@@ -393,4 +400,30 @@ func cmdUnbump(e *Env, fs *flag.FlagSet, args []string) error {
 		return err
 	}
 	return Install(e)
+}
+
+// offTreeSummary counts the entries that have no directory, split by where
+// their source actually comes from.
+//
+// They used to be one number called "pinned to history", which was true while
+// git was the only place a missing version could come from. A dependency
+// downloaded from a chain is also directory-less and is not in this
+// repository's history at all, so one number would now be a lie in whichever
+// direction the reader took it.
+func offTreeSummary(off []LockEntry) string {
+	history, chain := 0, 0
+	for _, e := range off {
+		if e.Source.Variant() == "chain" {
+			chain++
+			continue
+		}
+		history++
+	}
+	switch {
+	case chain == 0:
+		return fmt.Sprintf("%d pinned to history", history)
+	case history == 0:
+		return fmt.Sprintf("%d from a chain", chain)
+	}
+	return fmt.Sprintf("%d pinned to history, %d from a chain", history, chain)
 }

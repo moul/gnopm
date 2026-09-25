@@ -54,6 +54,8 @@ func Install(e *Env) error {
 
 	var extract []archiveEntry
 	var extractOf []LockEntry
+	var fromChain []LockEntry
+	var chainDest []string
 	kept := 0
 	for _, e := range want {
 		dest := filepath.Join(asm, filepath.FromSlash(e.Module))
@@ -67,8 +69,20 @@ func Install(e *Env) error {
 		if err := os.MkdirAll(dest, 0o755); err != nil {
 			return err
 		}
+		// A chain entry has no directory in any repository, so git cannot
+		// produce it. It comes from the shared download cache, and from the
+		// chain when the cache has not got it yet.
+		if e.Source.Variant() == "chain" {
+			fromChain = append(fromChain, e)
+			chainDest = append(chainDest, dest)
+			continue
+		}
 		extract = append(extract, archiveEntry{Dir: e.Source.Dir, Dest: dest})
 		extractOf = append(extractOf, e)
+	}
+
+	if err := fillFromChain(e, fromChain, chainDest); err != nil {
+		return err
 	}
 
 	// Group by commit: one `git archive` per commit, not per package.
@@ -285,7 +299,29 @@ func VerifyWith(e *Env, upstream string) error {
 
 	pinned := materializedEntries(lock)
 	bad := 0
+	var fromHistory []LockEntry
 	for _, e := range pinned {
+		// A chain entry has no commit, so git cannot prove it and asking git
+		// produced "commit \"\" is not in this repository". What proves it is
+		// the same h1 hash, over the copy that was materialized: the chain
+		// cannot redefine a published path, so bytes that hash right are the
+		// bytes that were locked.
+		if e.Source.Variant() == "chain" {
+			dest := filepath.Join(root, assemblyDir, filepath.FromSlash(e.Module))
+			h, err := hashDownloaded(dest)
+			if err != nil {
+				fmt.Fprintf(w, "  %s: not materialized, so it cannot be proved here. Run `gnopm sync`\n", e.Module)
+				bad++
+				continue
+			}
+			if h != e.Hash {
+				fmt.Fprintf(w, "  %s: the copy from chain %s hashes to %s, lock says %s\n",
+					e.Module, e.Source.Chain, h, e.Hash)
+				bad++
+			}
+			continue
+		}
+		fromHistory = append(fromHistory, e)
 		if _, err := gitResolve(root, e.Source.Commit); err != nil {
 			fmt.Fprintf(w, "  %s: %v\n", e.Module, err)
 			bad++
@@ -303,7 +339,7 @@ func VerifyWith(e *Env, upstream string) error {
 		}
 	}
 	if bad > 0 {
-		return fmt.Errorf("%d locked version(s) do not reproduce from history", bad)
+		return fmt.Errorf("%d locked version(s) do not reproduce", bad)
 	}
 	// Detected, not demanded. An explicit -upstream still wins.
 	upstream = upstreamRef(root, upstream)
@@ -313,7 +349,7 @@ func VerifyWith(e *Env, upstream string) error {
 			fmt.Fprintf(w, "  skipping the upstream check: %v\n", err)
 		} else {
 			var stranded []string
-			for _, en := range pinned {
+			for _, en := range fromHistory {
 				if !gitIsAncestor(root, en.Source.Commit, ref) {
 					stranded = append(stranded, en.Module)
 				}
@@ -328,8 +364,8 @@ func VerifyWith(e *Env, upstream string) error {
 			}
 		}
 	}
-	fmt.Fprintf(w, "gnopm: ok, %d modules locked (%d in tree, %d pinned to history)\n",
-		len(lock.Modules), len(pkgs), len(pinned))
+	fmt.Fprintf(w, "gnopm: ok, %d modules locked (%d in tree, %s)\n",
+		len(lock.Modules), len(pkgs), offTreeSummary(pinned))
 	return nil
 }
 
