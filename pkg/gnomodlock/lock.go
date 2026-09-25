@@ -64,12 +64,18 @@ type LockEntry struct {
 
 // Source is where a module's source lives. Four variants; the tagged union is
 // defined in full now because that is what makes this a format rather than one
-// repo's script, but only the first two are implemented.
+// repo's script.
 //
 //	{ dir }                 in the working tree, the version you edit
 //	{ commit, dir }         this repository's git history
+//	{ chain }               deployed source, read back with vm/qfile
 //	{ repo, commit, dir }   another git repository            (not implemented)
-//	{ chain, tx }           deployed source, via vm/qfile     (not implemented)
+//
+// The chain variant carries no tx, and that is a correction to what this
+// comment used to specify. vm/qfile reads by package path, not by transaction,
+// so a tx hash can say which deploy produced the bytes but cannot fetch them:
+// making it part of the union arm would put a field in the retrieval key that
+// retrieval cannot use. It stays an optional provenance note instead.
 type Source struct {
 	Dir    string // repo-relative, slash-separated
 	Commit string
@@ -116,7 +122,18 @@ func (s Source) Validate() error {
 	case "repo":
 		return fmt.Errorf("source variant {repo, commit, dir} is not implemented yet")
 	case "chain":
-		return fmt.Errorf("source variant {chain, tx} is not implemented yet")
+		// No Dir: the module path IS the address on a chain, so a directory
+		// would be a second, disagreeable answer to "where is this". Where it
+		// lands locally is the cache's business and the assembly's, neither of
+		// which the lock should name: two machines must be free to put it in
+		// different places and still agree that the lock is satisfied.
+		if s.Dir != "" {
+			return fmt.Errorf("source has both chain and dir")
+		}
+		if s.Commit != "" {
+			return fmt.Errorf("source has both chain and commit")
+		}
+		return nil
 	}
 	return fmt.Errorf("source sets no recognised field")
 }

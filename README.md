@@ -120,6 +120,50 @@ superseded version importing an older one is how a chain of versions stays
 alive, and that importer has no directory for grep to find. Grep would tell you
 the version is safe to drop.
 
+## Dependencies that live only on a chain
+
+A gno package's address is a chain, so the registry is the chain. `gnopm get`
+reads the source back off it, records it, and materializes it, and the import
+resolves:
+
+```sh
+gnopm get gno.land/p/nt/tinyavl/v0
+```
+
+```toml
+[[module]]
+module = "gno.land/p/nt/tinyavl/v0"
+source = { chain = "gnoland-1" }
+hash = "h1:m+ffVCW/8Tiu7S1eeEC73HkfDtLOQji4ywOfv27B6ek="
+```
+
+The files land in `~/.gnopm/download/<chain-id>/`, shared by every workspace on
+this machine the way `~/go/pkg/mod` is, so fetching a package once is enough.
+`gnopm env` says where, and `gnopm clean -cache` drops it.
+
+**`get` writes, `sync` only satisfies.** That is the same split Go made with
+`-mod=readonly`: discovering a dependency is an act and belongs to a command you
+typed, so `sync` will fetch what the lock already names and will never add an
+entry. A `sync` whose downloads are already cached **makes no network call at
+all**, which is what keeps a local-only workspace local.
+
+### Why there is no resolver here, and never will be
+
+npm, pip and apt are a registry plus a constraint solver. gnopm is neither, and
+it is not a simplification:
+
+- **A path on a chain is immutable.** There is no delete, and `addpkg` on an
+  occupied path fails, so the bytes at a path can never be redefined. A content
+  hash therefore pins something that genuinely cannot change, and `verify`
+  proves a downloaded dependency exactly as it proves one pinned to git history.
+- **There is no version range to solve**, because a gno import path carries its
+  version. Two versions of a package coexist as two paths.
+- **There is nothing to trust or to go down**, because the chain is the registry.
+
+So the failure modes that produced lockfile drift and non-deterministic installs
+do not exist here, and the feature that would reintroduce them is the one to
+refuse.
+
 ## `gnopm doc`, including the version nobody has
 
 Documentation as a first-class command, the way `go doc` is.

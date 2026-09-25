@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -38,6 +39,11 @@ type fakeChain struct {
 	// noAccount answers auth/accounts with an empty object, which is what a
 	// chain says about an address that has never received funds.
 	noAccount bool
+	// files serves real source, keyed by "<pkgpath>/<name>". live fakes a
+	// listing, which is all the publish probe looks at; files is what `gnopm
+	// get` needs, because it reads the bodies. A path present here answers
+	// both qfile shapes for real and takes precedence over live.
+	files map[string]string
 
 	// mu guards calls, and live/parked against the concurrent reads Warm
 	// makes. Serial probing needed none of this; a batch does.
@@ -60,7 +66,7 @@ func newFakeChain(t *testing.T) *fakeChain {
 	// would make the next test's "v0 is absent" pass or fail depending on what
 	// ran before it, and `go test` would write to a developer's home.
 	t.Setenv(cacheEnv, t.TempDir())
-	f := &fakeChain{live: map[string]bool{}, parked: map[string]bool{}, private: map[string]bool{}}
+	f := &fakeChain{live: map[string]bool{}, parked: map[string]bool{}, private: map[string]bool{}, files: map[string]string{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.calls++
@@ -103,6 +109,26 @@ func newFakeChain(t *testing.T) *fakeChain {
 			writeABCIData(w, strings.Join(paths, "\n"))
 		case "vm/qfile":
 			p := string(req.Params.Data)
+			// A package served with real source answers both shapes for real,
+			// and is checked first so files wins over live for one path.
+			f.mu.Lock()
+			body, isFile := f.files[p]
+			var names []string
+			for name := range f.files {
+				if rest, ok := strings.CutPrefix(name, p+"/"); ok && !strings.Contains(rest, "/") {
+					names = append(names, rest)
+				}
+			}
+			f.mu.Unlock()
+			if isFile {
+				writeABCIData(w, body)
+				return
+			}
+			if len(names) > 0 {
+				sort.Strings(names)
+				writeABCIData(w, strings.Join(names, "\n"))
+				return
+			}
 			// `<path>/gnomod.toml` is the one body read rather than counted:
 			// a published package's flags are only knowable from the file the
 			// chain stored, not from the fact that the path resolves.

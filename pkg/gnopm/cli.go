@@ -59,6 +59,14 @@ type Env struct {
 	// Verbose says what is being checked, and where each answer came from.
 	// Everything it writes goes to Errw, so -v never reaches the pipe.
 	Verbose bool
+	// RPC and ChainID are the -rpc and -chainid overrides, empty when the
+	// command did not declare them or the user did not pass them.
+	//
+	// They live here rather than being threaded through each call because
+	// materializing a { chain } entry can happen under any command that syncs,
+	// and a `gnopm get -rpc http://localhost:26657` whose own sync step then
+	// went and asked gno.land instead would be absurd. Found exactly that way.
+	RPC, ChainID string
 	// CacheDir is where chain answers persist between runs. "" is a cache that
 	// remembers nothing: -no-cache, GNOPM_CACHE=off, or a machine with no home
 	// directory. Left empty by anything that builds an Env directly, so a
@@ -163,7 +171,15 @@ Idempotent and silent when there is nothing to do, so it is safe on a
 Makefile prerequisite, a git hook, or every save. The git walk above
 happens only when something actually left the tree.
 
-Run it after adding or removing a package. bump runs it for you.`,
+Run it after adding or removing a package. bump runs it for you.
+
+  -rpc, -chainid  skip chain discovery, for a local gnodev. Only reached
+                  when a { chain } dependency is not in the download
+                  cache yet; a warm cache needs no network at all.`,
+			flags: func(fs *flag.FlagSet) {
+				fs.String("rpc", "", "chain rpc endpoint, skipping discovery")
+				fs.String("chainid", "", "chain id, skipping discovery")
+			},
 			run: func(e *Env, fs *flag.FlagSet, args []string) error { return Sync(e) },
 		},
 		{
@@ -285,6 +301,36 @@ go doc excludes them.
 				fs.Bool("u", false, "include unexported declarations")
 			},
 			run: cmdDoc,
+		},
+		{
+			name: "get", args: "<package-path>...",
+			group: "everyday",
+			short: "fetch a dependency that lives only on a chain",
+			long: `Reads a package's source back off the chain its path names, records it
+in gnomod.lock as { chain }, and materializes it so the import resolves.
+
+<package-path> is the full path, because that is its address on a chain:
+gno.land/p/alice/md/v1, not md. gnopm publish names the ones this
+workspace imports and cannot resolve.
+
+The files land in a download directory shared by every workspace on this
+machine, so fetching a package once is enough. gnopm env says where.
+
+get is the command that writes; sync only satisfies what get already
+decided, the way go build never adds a dependency. A path already in this
+workspace, or already pinned to this repository's history, is refused
+rather than fetched: one module path resolves to one place.
+
+A chain package is immutable by construction, since addpkg on an occupied
+path fails, so the recorded hash pins something that cannot change and
+verify proves a downloaded dependency exactly as it proves a pinned one.
+
+  -rpc, -chainid  skip chain discovery, for a local gnodev`,
+			flags: func(fs *flag.FlagSet) {
+				fs.String("rpc", "", "chain rpc endpoint, skipping discovery")
+				fs.String("chainid", "", "chain id, skipping discovery")
+			},
+			run: cmdGet,
 		},
 		{
 			name: "why", args: "<module>",
@@ -1123,7 +1169,8 @@ func Run(args []string, out, errw io.Writer) error {
 			return fmt.Errorf("-f cannot be used with -json")
 		}
 	}
-	e := &Env{Root: root, Out: out, Errw: errw, JSON: flagBool(fs, "json"), Quiet: flagBool(fs, "q"), Verbose: flagBool(fs, "v"), Format: tmpl}
+	e := &Env{Root: root, Out: out, Errw: errw, JSON: flagBool(fs, "json"), Quiet: flagBool(fs, "q"), Verbose: flagBool(fs, "v"), Format: tmpl,
+		RPC: flagString(fs, "rpc"), ChainID: flagString(fs, "chainid")}
 	if !flagBool(fs, "no-cache") {
 		e.CacheDir = cacheDir()
 	}

@@ -32,17 +32,25 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 )
 
 func main() {
 	live := flag.String("live", "", "comma-separated package paths this chain has published")
+	serve := flag.String("serve", "", "comma-separated <pkgpath>=<dir> pairs served as real source")
 	parked := flag.String("parked", "", "comma-separated package paths submitted but not enabled")
 	private := flag.String("private", "", "comma-separated live paths whose published gnomod declares private = true")
 	addr := flag.String("addr", "127.0.0.1:0", "listen address; port 0 picks a free one")
 	flag.Parse()
 
-	srv := &server{live: set(*live), parked: split(*parked), private: set(*private)}
+	served, err := parseServed(*serve)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "fakechain:", err)
+		os.Exit(2)
+	}
+	srv := &server{live: set(*live), parked: split(*parked), private: set(*private), served: served}
 
 	// Listen before printing, so the URL on stdout is a promise: a caller that
 	// reads a line and immediately connects cannot lose the race.
@@ -63,6 +71,45 @@ type server struct {
 	live    map[string]bool
 	parked  []string
 	private map[string]bool
+	// served maps a package path to a directory whose files are that
+	// package's real source. -live fakes a listing, which is all `publish`
+	// looks at; -serve answers with actual bytes, which is what `gnopm get`
+	// needs in order to fetch anything.
+	served map[string]string
+}
+
+// parseServed reads the -serve pairs, and checks each directory now rather
+// than on the first query: a typo should stop the script that started this,
+// not produce an empty package three steps later.
+func parseServed(s string) (map[string]string, error) {
+	out := map[string]string{}
+	for _, pair := range split(s) {
+		k, v, ok := strings.Cut(pair, "=")
+		if !ok {
+			return nil, fmt.Errorf("-serve wants <pkgpath>=<dir>, got %q", pair)
+		}
+		if _, err := os.ReadDir(v); err != nil {
+			return nil, err
+		}
+		out[k] = v
+	}
+	return out, nil
+}
+
+// fileNames lists a served package's plain files, sorted, as the chain does.
+func fileNames(dir string) ([]string, error) {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, e := range ents {
+		if !e.IsDir() {
+			out = append(out, e.Name())
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // request is only the part of the JSON-RPC envelope this needs. Decoding into
@@ -89,16 +136,39 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "vm/qinertpaths":
 		reply(w, []byte(strings.Join(s.parked, "\n")), nil)
 	case "vm/qfile":
+		// A served package answers both shapes for real, and is checked first
+		// so -serve wins over -live for the same path.
+		target := string(arg)
+		if dir, ok := s.served[target]; ok {
+			names, err := fileNames(dir)
+			if err != nil {
+				reply(w, nil, &abciError{Type: "/std.InternalError"})
+				return
+			}
+			reply(w, []byte(strings.Join(names, "\n")), nil)
+			return
+		}
+		if i := strings.LastIndex(target, "/"); i > 0 {
+			if dir, ok := s.served[target[:i]]; ok {
+				b, err := os.ReadFile(filepath.Join(dir, filepath.Base(target)))
+				if err != nil {
+					reply(w, nil, &abciError{Type: "/vm.InvalidFileError"})
+					return
+				}
+				reply(w, b, nil)
+				return
+			}
+		}
 		// A package path lists its files; publish reads only whether the
 		// query succeeded. `<path>/gnomod.toml` is the one body that is read
 		// rather than counted, because publish compares the `private` the
 		// chain holds against the one in the working tree.
-		if path, ok := strings.CutSuffix(string(arg), "/gnomod.toml"); ok {
+		if path, ok := strings.CutSuffix(target, "/gnomod.toml"); ok {
 			if s.live[path] {
 				reply(w, []byte(gnomodOf(path, s.private[path])), nil)
 				return
 			}
-		} else if s.live[string(arg)] {
+		} else if s.live[target] {
 			reply(w, []byte("gnomod.toml\n"), nil)
 			return
 		}

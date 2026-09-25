@@ -43,6 +43,17 @@ func TestParseLockRejects(t *testing.T) {
 	if _, err := parseLock(good); err != nil {
 		t.Fatalf("the good case must parse: %v", err)
 	}
+	for _, ok := range []string{
+		"lock = 1\n\n[[module]]\nmodule = \"m\"\nsource = { chain = \"gnoland-1\" }\nhash = \"h1:x\"\n",
+		// tx is optional provenance, not part of the retrieval key: vm/qfile
+		// reads by path, so a tx says which deploy produced the bytes and
+		// cannot fetch them.
+		"lock = 1\n\n[[module]]\nmodule = \"m\"\nsource = { chain = \"gnoland-1\", tx = \"abc\" }\nhash = \"h1:x\"\n",
+	} {
+		if _, err := parseLock(ok); err != nil {
+			t.Fatalf("a chain source must parse: %v\n%s", err, ok)
+		}
+	}
 	for _, tc := range []struct{ name, in, want string }{
 		{"no format", "[[module]]\nmodule = \"gno.land/p/a/v0\"\nsource = { dir = \"p/a\" }\n", "format declaration"},
 		{"future format", "lock = 99\n", "upgrade gnopm"},
@@ -55,7 +66,13 @@ func TestParseLockRejects(t *testing.T) {
 		{"duplicate module", "lock = 1\n[[module]]\nmodule = \"m\"\nsource = { dir = \"a\" }\n[[module]]\nmodule = \"m\"\nsource = { dir = \"b\" }\n", "duplicate entry"},
 		{"empty source", "lock = 1\n[[module]]\nmodule = \"m\"\nsource = {  }\n", "empty inline table"},
 		{"unquoted", "lock = 1\n[[module]]\nmodule = m\nsource = { dir = \"d\" }\n", "quoted string"},
-		{"not implemented: chain", "lock = 1\n[[module]]\nmodule = \"m\"\nsource = { chain = \"gnoland-1\", tx = \"abc\" }\nhash = \"h1:x\"\n", "not implemented"},
+		// The chain arm is implemented now, so what it rejects is a source
+		// naming two places at once. A chain package's address IS its module
+		// path, so a dir or a commit beside it is a second, disagreeable
+		// answer to "where is this".
+		{"chain with dir", "lock = 1\n[[module]]\nmodule = \"m\"\nsource = { chain = \"gnoland-1\", dir = \"d\" }\nhash = \"h1:x\"\n", "both chain and dir"},
+		{"chain with commit", "lock = 1\n[[module]]\nmodule = \"m\"\nsource = { chain = \"gnoland-1\", commit = \"" + strings.Repeat("a", 40) + "\" }\nhash = \"h1:x\"\n", "both chain and commit"},
+		{"not implemented: repo", "lock = 1\n[[module]]\nmodule = \"m\"\nsource = { repo = \"https://x\", commit = \"" + strings.Repeat("a", 40) + "\", dir = \"d\" }\nhash = \"h1:x\"\n", "not implemented"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := parseLock(tc.in)
