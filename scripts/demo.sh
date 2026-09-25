@@ -395,6 +395,20 @@ assert_grep "$out" "gno.land/p/demo/table/v0"
 [ -f "$repo/.gnopm/gno.land/p/demo/table/v0/table.gno" ] || fail "table/v0 not materialized"
 grep -q 'func Rule(width int) string' "$repo/.gnopm/gno.land/p/demo/table/v0/table.gno" \
   || fail "table/v0 should still carry the OLD signature"
+
+# The generated README tells a reader to run exactly these, so the script that
+# writes that README has to prove they answer. `doc` on a version with no
+# directory is the claim most likely to rot: it reads the assembly, which only
+# exists because sync put it there.
+echo "--- gnopm doc, on the version that has no directory ---"
+out=$(gnopm doc gno.land/p/demo/table/v0 Rule 2>&1); echo "$out"
+assert_grep "$out" "has no directory"
+assert_grep "$out" "func Rule(width int) string"
+out=$(gnopm doc gno.land/p/demo/table/v1 Rule 2>&1); echo "$out"
+assert_grep "$out" "func Rule(width int) (string, error)"
+case "$out" in
+  *"has no directory"*) fail "v1 IS in the tree, so doc must not read it from the assembly" ;;
+esac
 ok "table/v0 keeps its old signature, out of git history, for whatever still imports it"
 
 # board still imports table/v0, and that import still resolves.
@@ -667,8 +681,9 @@ This repository is the worked example for
 package manager for gno workspaces that keeps a package's version in its
 `gnomod.toml` instead of in its directory name.
 
-It is produced by `tools/gnopm/scripts/demo.sh`, which is also gnopm's
-integration test: every claim below is asserted by the script that wrote this
+It is produced by
+[`scripts/demo.sh`](https://github.com/moul/gnopm/blob/main/scripts/demo.sh), which is
+also gnopm's integration test: every claim below is asserted by the script that wrote this
 file, so if the tool stops behaving this way the script fails rather than
 quietly producing a misleading demo.
 
@@ -719,6 +734,21 @@ gnopm ls -pinned      # just the ones with no directory any more
 gnopm verify          # prove every pinned version still reproduces
 gnopm bump set        # one line, then edit the files in place
 ```
+
+The two questions worth asking here rather than reading about, because this
+repository is built to have an answer for them:
+
+```
+gnopm doc gno.land/p/demo/table/v0 Rule   # a version with no directory at all
+gnopm doc gno.land/p/demo/table/v1 Rule   # and the signature it grew
+gnopm why gno.land/p/demo/strs/v0         # the importer that has no directory either
+```
+
+`table/v0` has no directory in this tree. It is pinned in `gnomod.lock` and
+rebuilt from the commit that still holds it, so `doc` can print its old
+signature next to the new one, and that pair IS the compatibility diff of the
+bump. `why` finds `table/v0` as the only importer of `strs/v0`: grep over the
+working tree finds nothing and would tell you the version is safe to drop.
 
 ## CI
 
