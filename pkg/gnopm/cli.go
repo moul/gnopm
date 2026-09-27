@@ -410,6 +410,36 @@ empty.
 			run: cmdWhy,
 		},
 		{
+			name:    "outdated",
+			group:   "chain",
+			records: true,
+			short:   "which imported versions have a newer one on the chain",
+			long: `Reports, for every versioned module in gnomod.lock, whether the chain
+its path names has published a higher version.
+
+npm and cargo need a registry API, a semver parser and a policy about
+what "newer" means under a range. Here a version is the last element of
+the import path and the numbers are consecutive, so the question is
+whether .../v(n+1) exists, which is one query against a chain that can
+never redefine or withdraw what it published. The answer is exact
+rather than a best guess.
+
+It changes nothing, and there is no gnopm update. A newer version is a
+different import path, so moving to it is editing the import: there is
+no range to re-solve and nothing moves under you.
+
+It looks a few numbers past yours rather than only the next one,
+because a version skipped by a stack of pull requests leaves a real
+hole and stopping at it would report nothing.
+
+  -rpc, -chainid  skip chain discovery, for a local gnodev`,
+			flags: func(fs *flag.FlagSet) {
+				fs.String("rpc", "", "chain rpc endpoint, skipping discovery")
+				fs.String("chainid", "", "chain id, skipping discovery")
+			},
+			run: cmdOutdated,
+		},
+		{
 			name: "tree", args: "[package]...",
 			group:            "inspect",
 			completesModules: true,
