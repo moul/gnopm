@@ -41,6 +41,54 @@ linux, macOS and Windows on amd64 and arm64, with checksums.
 
 ---
 
+## Coming from npm, cargo, pip or go
+
+```sh
+gnopm init                      # there was no way to start before this
+gnopm search avl                # the chain is the registry
+gnopm get gno.land/p/nt/tinyavl/v0
+gnopm tree
+```
+
+| you would type | here | why it differs |
+|---|---|---|
+| `npm init`, `cargo init` | `gnopm init` | nothing else creates a gno workspace. `gno mod init` makes a *package* |
+| `npm install`, `cargo add` | **nothing, usually** | an import path IS the address, so a package in your workspace already resolves. Only one that lives on a chain needs `gnopm get` |
+| `npm ls`, `cargo tree` | `gnopm tree` | `gnopm graph` is the same thing as DOT, for CI |
+| `npm search`, `cargo search` | `gnopm search` | a state query over the chain, not a service somebody operates |
+| `npm outdated` | `gnopm outdated` | exact, not a guess: the question is whether `.../v(n+1)` exists |
+| `npm update`, `cargo update` | **nothing, on purpose** | a newer version is a *different import path*, so moving is editing the import |
+| `npm audit` | **nothing to audit** | there is no registry to compromise, and a published path can never be redefined |
+| `npm publish`, `cargo publish` | `gnopm publish` | gnopm holds no key and never signs. gnokey does, and it prompts you |
+| `go mod tidy` | `gnopm tidy` | plus a chain pass, which finds version numbers spent on nothing |
+| `go mod why` | `gnopm why` | and it finds importers that have no directory left |
+| `go doc` | `gnopm doc` | including versions that have no directory anywhere |
+| `npm test`, `cargo build` | **the toolchain** | `gno test ./...`. gnopm resolves and orchestrates; it does not build |
+
+Type any of the left-hand column and gnopm will tell you this itself, rather
+than saying "unknown command".
+
+### The three things that are missing on purpose
+
+Newcomers read these as gaps. They are the design, and each one removes a whole
+class of bug the other ecosystems still fight:
+
+**No resolver.** A gno import path *contains* its version, so two versions of a
+package are two paths and coexist without conflict. There is no constraint to
+solve, which is the entire class of problem that produces SAT solvers and
+dependency hell. gnopm will not grow one.
+
+**No registry.** The chain is the registry. Nothing to operate, rank, spam,
+compromise or take offline, and no gap between what a search returns and what an
+import resolves to.
+
+**No lockfile drift.** A path on a chain cannot be redefined or withdrawn:
+`addpkg` on an occupied path fails and there is no delete. So a content hash
+pins something that genuinely cannot change, and `gnomod.lock` is source you
+commit rather than a cache that goes stale.
+
+---
+
 ## Why
 
 A gno package path ends in its version, so the obvious layout gives each
@@ -77,7 +125,7 @@ keeps resolving.
 ## The commands
 
 <p align="center">
-  <img src="docs/img/help.svg" alt="gnopm help: eighteen commands, grouped" width="800">
+  <img src="docs/img/help.svg" alt="gnopm help: every command, grouped" width="800">
 </p>
 
 `status` to ask, `sync` to fix, and those two are most of it. `sync` converges:
