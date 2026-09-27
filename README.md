@@ -418,9 +418,14 @@ and so on, still in dependency order, each taking the next sequence.
 
 Asking a chain about two hundred packages is two hundred round trips, so the one
 answer that cannot change is kept. A path that is live on a chain stays live:
-there is no delete, and `addpkg` on an occupied path fails, so its bytes can never
-be redefined either. `~/.gnopm/live/<chain-id>` remembers those, one path per
-line, and later runs only ask about what is missing. Measured on a 193-package
+there is no delete. `~/.gnopm/live/<chain-id>` remembers those, one path per
+line, and later runs only ask about what is missing.
+
+Live is all that is cached, and it is cached because it is the answer that cannot
+change. The *bytes* at a live path can: a package whose mempackage declared
+`private = true` may be replaced by the address that created it, which is what
+`-republish` is for. That never reads the cache, because what it compares is the
+source, and the source is exactly the thing that moved. Measured on a 193-package
 workspace against `gnoland-1`: **5.8s** asking the chain everything, **0.67s**
 once the cache is warm, same script out.
 
@@ -435,6 +440,35 @@ gnopm publish -no-cache   # ask the chain everything
 GNOPM_CACHE=off gnopm …   # the same, for a whole shell; or point it elsewhere
 gnopm env                 # where the cache is, among everything else gnopm worked out
 ```
+
+## Replacing a package that is already live
+
+Some realms never get a `/vN`. If something external hard-codes the path, the
+bare path *is* the interface, and shipping a code change means sending
+`MsgAddPackage` at the same path again. gno.land allows that when the published
+mempackage declared `private = true`, and binds it to the creator address.
+
+`publish` answers "what is absent", so it has nothing to say about those.
+`-republish` makes it look closer:
+
+```sh
+gnopm publish -republish moul/home          # plan it
+gnopm publish -republish -print moul/home   # write the command out, run nothing
+```
+
+Both halves are checked, and the report names whichever one said no:
+
+- the chain's copy must declare `private = true`. A public package refuses a
+  second one at the same path, and the flag binds at the first publish.
+- the source must actually differ. Re-sending identical bytes costs gas and
+  resets state to arrive where it already was.
+
+> ⚠️ A redeploy re-runs `init()` and **resets realm state**. Whatever the realm
+> accumulated since it went up is gone. Nothing gnopm can read says whether that
+> mattered, which is why this is a flag and not a default.
+
+Only packages the pattern named are considered: a dependency pulled in to satisfy
+an import is never republished.
 
 ## Trees and graphs
 

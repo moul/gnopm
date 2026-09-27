@@ -16,7 +16,9 @@ import (
 //
 // That is one query per candidate against machinery that already exists, and
 // the answer is exact rather than a best guess, because a published path can
-// never be redefined or withdrawn.
+// never be withdrawn. Its BYTES can change, since a private package may be
+// replaced by its creator (see republish.go), but that cannot make a version
+// that exists stop existing, and existence is the whole question here.
 //
 // The other half is what makes it honest: gnopm will not change anything as a
 // result. A newer version is a different import path, so moving to it is
