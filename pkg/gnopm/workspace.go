@@ -64,7 +64,10 @@ func FindRoot(dir string) (string, error) {
 		}
 		parent := filepath.Dir(d)
 		if parent == d {
-			return "", fmt.Errorf("%s not found in %q or any parent", workspaceMarker, dir)
+			// Naming the file without saying it is yours to create is how
+			// somebody's first gnopm command became their last one.
+			return "", fmt.Errorf("%s not found in %q or any parent, so this is not a gno workspace.\n"+
+				"  `gnopm init` makes one here.", workspaceMarker, dir)
 		}
 		d = parent
 	}

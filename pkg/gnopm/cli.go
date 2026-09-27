@@ -135,6 +135,28 @@ var commands []*command
 func init() {
 	commands = []*command{
 		{
+			name: "init", args: "[dir]",
+			group:    "everyday",
+			anywhere: true,
+			short:    "make this directory a gno workspace",
+			long: `Writes gnowork.toml, the lock, and the .gitignore rule, then says what
+to type next.
+
+Nothing else creates a workspace. ` + "`gno mod init`" + ` writes a package's
+gnomod.toml; this writes the thing that holds packages. gno owns the
+package manifest, gnopm owns the workspace around it, and init does not
+duplicate the other half.
+
+gnowork.toml is empty on purpose, and the file says so: gno resolves
+every package underneath it by the module line in its gnomod.toml, not
+by its directory name, which is the premise this whole tool is built on.
+
+Running it twice is fine. Running it inside an existing workspace is
+refused, because nested workspaces resolve ambiguously and the nesting
+is invisible from the directory you are standing in.`,
+			run: cmdInit,
+		},
+		{
 			name: "status", aliases: []string{"st"},
 			group:   "everyday",
 			records: true,
@@ -1149,6 +1171,13 @@ func Run(args []string, out, errw io.Writer) error {
 
 	c := lookup(name)
 	if c == nil {
+		// A word borrowed from another ecosystem gets the reason, not a
+		// shrug. Checked before edit distance, which is what turned `gnopm i`
+		// into "did you mean status" and `gnopm new` into "did you mean get":
+		// confidently wrong beats unhelpful only in the wrong direction.
+		if advice, ok := translate(name); ok {
+			return fmt.Errorf("%s", advice)
+		}
 		if s := suggest(name); len(s) > 0 {
 			return fmt.Errorf("unknown command %q. Did you mean %s?", name, phrase(s))
 		}

@@ -2,6 +2,7 @@ package gnopm
 
 import (
 	"bytes"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -201,6 +202,35 @@ func TestNoUsageLineEndsInWhitespace(t *testing.T) {
 		for i, line := range strings.Split(out.String(), "\n") {
 			if line != strings.TrimRight(line, " \t") {
 				t.Errorf("gnopm help %s, line %d ends in whitespace: %q", c.name, i+1, line)
+			}
+		}
+	}
+}
+
+// TestForeignAdviceNamesRealCommands walks every `gnopm <word>` the
+// cross-ecosystem table suggests and checks the command exists.
+//
+// The table is advice given at the exact moment somebody is deciding whether
+// this tool is any good, so pointing them at a command that does not exist is
+// worse than the bare "unknown command" it replaced. It is also the easiest
+// kind of rot: an entry written while a command was planned, merged before it
+// landed. This makes that a failing test rather than a bad first impression.
+//
+// gno's own commands are deliberately not checked. gnopm does not own them and
+// asserting on them here would make this suite fail when an unrelated project
+// renames something.
+func TestForeignAdviceNamesRealCommands(t *testing.T) {
+	re := regexp.MustCompile("`gnopm ([a-z-]+)")
+	for word, advice := range foreign {
+		// A word that is a real command here must not be in the table at all:
+		// it is unreachable, because translate is only consulted after lookup
+		// has failed, so it would be advice nobody can ever see.
+		if lookup(word) != nil {
+			t.Errorf("foreign[%q] shadows a real command, so it is unreachable", word)
+		}
+		for _, m := range re.FindAllStringSubmatch(advice, -1) {
+			if lookup(m[1]) == nil {
+				t.Errorf("foreign[%q] points at `gnopm %s`, which does not exist", word, m[1])
 			}
 		}
 	}
