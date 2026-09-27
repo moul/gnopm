@@ -46,7 +46,16 @@ func Status(e *Env) error {
 
 	e.printf("%d modules   %d in tree   %s\n", len(lock.Modules), len(pkgs), offTreeSummary(pinned))
 	if len(lock.Modules) == 0 {
-		e.printf("\nno %s yet. run `gnopm sync`\n", lockFile)
+		// An empty lock and a missing one are different states, and conflating
+		// them told a brand-new workspace to run `gnopm sync`, which had just
+		// run and had nothing to do. The honest answer to "0 modules" is that
+		// there are no packages yet, and how to make one.
+		if _, err := os.Stat(filepath.Join(e.Root, lockFile)); err != nil {
+			e.printf("\nno %s yet. run `gnopm sync`\n", lockFile)
+			return nil
+		}
+		e.printf("\nno packages yet. add one with `gno mod init gno.land/p/<namespace>/<name>/v0`,\n" +
+			"or fetch one with `gnopm get <package-path>`\n")
 		return nil
 	}
 	e.printf("lock         %s\n", lockWhy)
