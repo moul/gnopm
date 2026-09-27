@@ -168,6 +168,38 @@ design and is wrong twice: the workspace scan deliberately does not descend into
 `vendor/`, because vendored code is not yours to bump or publish, and it would
 throw the provenance away.
 
+### `gnopm search`, because the chain is the registry
+
+```sh
+gnopm search gno.land/p/moul   # a path prefix, asked of the chain directly
+gnopm search @moul             # a namespace: both p/ and r/, resolved chain-side
+gnopm search avl               # a word, scanned over one page of paths
+```
+
+npm and cargo query a service somebody operates, which can rank, spam-filter, go
+down, and disagree with what you end up installing. Here it is a state query
+over the live key space, so the result is exact, unranked, and identical to what
+importing that path would resolve to. It works outside a workspace, because
+finding a package is what you do before you have one.
+
+### `gnopm outdated`, which is cheap here and expensive everywhere else
+
+```
+$ gnopm outdated
+MODULE                  LATEST                  AHEAD
+gno.land/p/nt/tinyavl/v0  gno.land/p/nt/tinyavl/v2  2
+```
+
+`npm outdated` needs a registry API, a semver parser and a policy about what
+"newer" means under a caret range. Here a version is the last element of the
+import path and the numbers are consecutive, so the question is whether
+`.../v(n+1)` exists: one query against a chain that can never redefine or
+withdraw what it published. The answer is exact rather than a best guess.
+
+It changes nothing, and **there is no `gnopm update`**. A newer version is a
+different import path, so moving to it is editing the import. `gnopm doc` on
+both versions shows what changed.
+
 ### Why there is no resolver here, and never will be
 
 npm, pip and apt are a registry plus a constraint solver. gnopm is neither, and

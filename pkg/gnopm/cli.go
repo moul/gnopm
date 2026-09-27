@@ -410,6 +410,66 @@ empty.
 			run: cmdWhy,
 		},
 		{
+			name: "search", args: "<term>",
+			group:    "chain",
+			anywhere: true,
+			short:    "find a published package on the chain",
+			long: `Lists live package paths matching a term. Three shapes:
+
+  gnopm search gno.land/p/moul   a path prefix, asked of the chain directly
+  gnopm search @moul             a namespace: both p/ and r/, resolved chain-side
+  gnopm search avl               a word, scanned over one page of paths
+
+npm and cargo query a service somebody operates, which can rank,
+spam-filter, go down, and disagree with what you end up installing.
+gno's registry is the chain, so this is a state query over the live key
+space: exact, unranked, and identical to what importing that path would
+resolve to.
+
+Works outside a workspace, because finding a package is what you do
+before you have one.
+
+  -limit    how many paths to ask for. The chain defaults to 1000 and
+            caps at 10000
+  -rpc, -chainid  skip chain discovery, for a local gnodev`,
+			flags: func(fs *flag.FlagSet) {
+				fs.Int("limit", 0, "how many paths to ask the chain for")
+				fs.String("rpc", "", "chain rpc endpoint, skipping discovery")
+				fs.String("chainid", "", "chain id, skipping discovery")
+			},
+			run: cmdSearch,
+		},
+		{
+			name:    "outdated",
+			group:   "chain",
+			records: true,
+			short:   "which imported versions have a newer one on the chain",
+			long: `Reports, for every versioned module in gnomod.lock, whether the chain
+its path names has published a higher version.
+
+npm and cargo need a registry API, a semver parser and a policy about
+what "newer" means under a range. Here a version is the last element of
+the import path and the numbers are consecutive, so the question is
+whether .../v(n+1) exists, which is one query against a chain that can
+never redefine or withdraw what it published. The answer is exact
+rather than a best guess.
+
+It changes nothing, and there is no gnopm update. A newer version is a
+different import path, so moving to it is editing the import: there is
+no range to re-solve and nothing moves under you.
+
+It looks a few numbers past yours rather than only the next one,
+because a version skipped by a stack of pull requests leaves a real
+hole and stopping at it would report nothing.
+
+  -rpc, -chainid  skip chain discovery, for a local gnodev`,
+			flags: func(fs *flag.FlagSet) {
+				fs.String("rpc", "", "chain rpc endpoint, skipping discovery")
+				fs.String("chainid", "", "chain id, skipping discovery")
+			},
+			run: cmdOutdated,
+		},
+		{
 			name: "tree", args: "[package]...",
 			group:            "inspect",
 			completesModules: true,
