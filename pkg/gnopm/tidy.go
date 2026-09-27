@@ -109,6 +109,13 @@ func Tidy(e *Env, opts TidyOptions) error {
 		fmt.Fprintf(w, "chain        skipped (-offline)\n")
 		return nil
 	}
+	// Adding before reporting: an import the workspace cannot resolve is a
+	// broken workspace, and tidy's job is to make it right. tidyChain's report
+	// is then about the workspace tidy is leaving behind rather than the one it
+	// was handed.
+	if err := tidyFetch(e, opts); err != nil {
+		return err
+	}
 	return tidyChain(e, opts)
 }
 
@@ -147,14 +154,35 @@ func tidyLock(e *Env, dryRun bool) error {
 	upstream := upstreamRef(e.Root, "")
 
 	var drop []LockEntry
+	reason := map[string]string{}
 	for _, en := range materializedEntries(lock) {
 		if imports[en.Module] {
+			continue
+		}
+		// A chain dependency is not held here by git, so the reachability
+		// argument above does not apply to it and printing it was nonsense:
+		// "it never reached origin/main" about a package that lives on a
+		// chain and has nothing to do with this repository's history.
+		//
+		// Its own rule is simpler and stronger. Dropping it loses nothing at
+		// all, because the bytes are on a chain that cannot delete or redefine
+		// them, so `gnopm get` brings the identical package back. The git case
+		// needs its second condition precisely because a branch commit CAN
+		// disappear; this one cannot.
+		if en.Source.Variant() == "chain" {
+			drop = append(drop, en)
+			reason[en.Module] = "nothing imports it; `gnopm get` brings it back"
 			continue
 		}
 		if upstream != "" && gitIsAncestor(e.Root, en.Source.Commit, upstream) {
 			continue // it shipped; not ours to forget
 		}
+		why := "nothing imports it"
+		if upstream != "" {
+			why += ", and it never reached " + upstream
+		}
 		drop = append(drop, en)
+		reason[en.Module] = why
 	}
 	if len(drop) == 0 {
 		fmt.Fprintln(e.Errw, "pins         nothing to drop")
@@ -162,11 +190,7 @@ func tidyLock(e *Env, dryRun bool) error {
 	}
 	sort.Slice(drop, func(i, j int) bool { return drop[i].Module < drop[j].Module })
 	for _, en := range drop {
-		why := "nothing imports it"
-		if upstream != "" {
-			why += ", and it never reached " + upstream
-		}
-		fmt.Fprintf(e.Errw, "drop %s (%s)\n", en.Module, why)
+		fmt.Fprintf(e.Errw, "drop %s (%s)\n", en.Module, reason[en.Module])
 	}
 	if dryRun {
 		return nil
@@ -292,4 +316,87 @@ func tidyChain(e *Env, opts TidyOptions) error {
 		fmt.Fprintln(w, l)
 	}
 	return nil
+}
+
+// tidyFetch adds a { chain } entry for an import that resolves nowhere.
+//
+// The `go mod tidy` half, and the reason tidy is allowed to write where sync is
+// not: discovering a dependency is an act, and tidy is the command you type
+// when you want the workspace made right whatever that costs.
+//
+// It only adds what the chain says is LIVE. A parked path is a submission still
+// waiting on an approver, so recording it would pin a hash that an approver can
+// still reject; an absent one is simply a typo or a package nobody has
+// published, and inventing an entry for it would turn a clear "cannot resolve"
+// into a lock that fails later and further away.
+func tidyFetch(e *Env, opts TidyOptions) error {
+	w := e.Errw
+	lock, err := readLock(e.Root)
+	if err != nil {
+		return err
+	}
+	pkgs, err := scanPackages(e.Root)
+	if err != nil {
+		return err
+	}
+	imports, err := workspaceImports(e.Root)
+	if err != nil {
+		return err
+	}
+	resolves := map[string]bool{}
+	for _, en := range lock.Modules {
+		resolves[en.Module] = true
+	}
+	for _, p := range pkgs {
+		resolves[p.Module] = true
+	}
+	var missing []string
+	for imp := range imports {
+		if !resolves[imp] {
+			missing = append(missing, imp)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	sort.Strings(missing)
+
+	probe, err := NewProbe(e, missing[0], opts.RPC, opts.ChainID)
+	if err != nil {
+		return fmt.Errorf("%w\n  `gnopm tidy -offline` skips the chain pass", err)
+	}
+	bar := newProgress(e, "looking for "+fmt.Sprint(len(missing))+" unresolved import(s)")
+	err = probe.Warm(missing, bar.step)
+	bar.stop()
+	if err != nil {
+		return err
+	}
+
+	var add []string
+	for _, m := range missing {
+		st, err := probe.State(m)
+		if err != nil {
+			return err
+		}
+		switch st {
+		case StateLive:
+			add = append(add, m)
+		case StateParked:
+			fmt.Fprintf(w, "imports      %s is parked on %s, so it is not fetched: an approver can still reject it\n",
+				m, probe.Chain().ID)
+		default:
+			fmt.Fprintf(w, "imports      %s resolves nowhere and %s has never had it\n", m, probe.Chain().ID)
+		}
+	}
+	if len(add) == 0 {
+		return nil
+	}
+	if opts.DryRun {
+		for _, m := range add {
+			fmt.Fprintf(w, "would get %s from %s\n", m, probe.Chain().ID)
+		}
+		return nil
+	}
+	fmt.Fprintf(w, "imports      %d unresolved import(s) are live on %s, fetching\n", len(add), probe.Chain().ID)
+	return Get(e, add, opts.RPC, opts.ChainID)
 }

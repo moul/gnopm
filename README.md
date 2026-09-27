@@ -334,9 +334,15 @@ reads:
   <img src="docs/img/tidy.svg" alt="gnopm tidy -offline" width="620">
 </p>
 
-Four passes: `sync`, then drop any pin nothing imports whose commit never
-reached the default branch, then `verify`'s expensive proof over what is left,
-then the chain. Against a live chain the fourth pass is the interesting one:
+Five passes: `sync`, then drop what nothing imports, then `verify`'s expensive
+proof over what is left, then fetch any import that resolves nowhere and is live
+on chain, then ask the chain which version numbers ever meant anything.
+
+Dropping needs two conditions for a version pinned to git history, that nothing
+imports it **and** its commit never reached the default branch, because a branch
+commit can disappear. A `{ chain }` dependency needs only the first: the bytes
+are on a chain that cannot delete or redefine them, so `gnopm get` brings the
+identical package back. Against a live chain the fourth pass is the interesting one:
 
 ```
 4 version number(s) spent on nothing:
