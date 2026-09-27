@@ -410,6 +410,36 @@ empty.
 			run: cmdWhy,
 		},
 		{
+			name: "search", args: "<term>",
+			group:    "chain",
+			anywhere: true,
+			short:    "find a published package on the chain",
+			long: `Lists live package paths matching a term. Three shapes:
+
+  gnopm search gno.land/p/moul   a path prefix, asked of the chain directly
+  gnopm search @moul             a namespace: both p/ and r/, resolved chain-side
+  gnopm search avl               a word, scanned over one page of paths
+
+npm and cargo query a service somebody operates, which can rank,
+spam-filter, go down, and disagree with what you end up installing.
+gno's registry is the chain, so this is a state query over the live key
+space: exact, unranked, and identical to what importing that path would
+resolve to.
+
+Works outside a workspace, because finding a package is what you do
+before you have one.
+
+  -limit    how many paths to ask for. The chain defaults to 1000 and
+            caps at 10000
+  -rpc, -chainid  skip chain discovery, for a local gnodev`,
+			flags: func(fs *flag.FlagSet) {
+				fs.Int("limit", 0, "how many paths to ask the chain for")
+				fs.String("rpc", "", "chain rpc endpoint, skipping discovery")
+				fs.String("chainid", "", "chain id, skipping discovery")
+			},
+			run: cmdSearch,
+		},
+		{
 			name:    "outdated",
 			group:   "chain",
 			records: true,
