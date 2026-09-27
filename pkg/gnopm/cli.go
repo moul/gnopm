@@ -511,6 +511,7 @@ at the first failure.
   gnopm publish -print                # write the commands out, run nothing
   gnopm publish -one-tx-per-package   # a transaction each, the unbatched shape
   gnopm publish -o tx.json            # write the documents somewhere of your own
+  gnopm publish -republish moul/home  # replace a live private realm with the tree's copy
 
 Layers are what is batched, not the whole graph. Messages in one transaction do
 share a store and run in order, so in principle a dependent could follow its
@@ -572,6 +573,34 @@ version you are about to publish.
   -addr        the creator address: it is a field of every message, so batching
                cannot start without it. Default: asked of the key list. Without
                it publish still works, one transaction per package.
+  -republish   also send a package that is ALREADY LIVE, to replace it.
+
+               publish normally answers "what is absent", which is the right
+               question exactly once per package. A realm at a path something
+               external hard-codes never gets a second version, so the only way
+               to ship a code change is to send MsgAddPackage at the same path
+               again. gno.land allows that for a package whose mempackage
+               declared private = true, bound to the address in [addpkg].creator.
+
+               Opt-in, and checked rather than forced. A package is republished
+               only when BOTH hold, and the report says which one failed:
+
+                 - the chain's copy declares private = true. A public package
+                   refuses a second one at the same path, and the flag binds at
+                   the first publish and can never be changed.
+                 - its source differs from the chain's copy. Re-sending
+                   identical bytes spends gas and resets state to arrive where
+                   it already was.
+
+               ⚠️ A redeploy re-runs init() and RESETS realm state. Everything
+               the realm accumulated since it went up is gone. Nothing gnopm can
+               read says whether that mattered, which is why this is a flag and
+               not a default.
+
+               Only packages the pattern named are considered. A dependency
+               pulled in to satisfy an import is never republished: replacing it
+               because something else mentions it is not what was asked.
+
   -v           say what is checked and whether the chain or the cache answered
   -no-cache    ask the chain everything, ignoring ~/.gnopm`,
 			flags: func(fs *flag.FlagSet) {
@@ -583,6 +612,7 @@ version you are about to publish.
 				fs.String("o", "", "write the unsigned transaction documents here instead of the cache")
 				fs.String("addr", "", "the creator address (default: asked of `gnokey list`)")
 				fs.Bool("one-tx-per-package", false, "a transaction each, instead of one per dependency layer")
+				fs.Bool("republish", false, "also replace a live package whose source has changed, when the chain's copy is private")
 			},
 			run: cmdPublish,
 		},

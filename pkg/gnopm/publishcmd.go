@@ -22,6 +22,16 @@ type plan struct {
 	// missing are imports that are not live, that this run cannot fix, and
 	// that therefore stop this package going up.
 	missing []depBlock
+	// republish marks a package already live that -republish will send again.
+	// It is otherwise an ordinary entry: same payload, same gas, same batching.
+	republish bool
+	// changed names the files that differ from the chain's copy, set only for
+	// a republish, so the report can say what the redeploy is actually for.
+	changed []string
+	// skipped is why an already-live package the pattern selected will NOT be
+	// republished. Reported rather than silent: under -republish, a package
+	// quietly doing nothing is the failure mode worth spending a line on.
+	skipped string
 }
 
 // depBlock is one unsatisfied import and why it is unsatisfied. The two
@@ -31,6 +41,21 @@ type plan struct {
 type depBlock struct {
 	module string
 	why    string
+}
+
+// publishes reports whether a plan results in an addpkg message.
+//
+// Two reasons qualify and they are not interchangeable: absent means the path
+// is empty, republish means the path is occupied by an older copy of the same
+// package. Every consumer downstream treats them identically, which is the
+// point, so the predicate is shared rather than restated: publishlayers.go
+// carried its own copy of the absent-only form and silently dropped every
+// republish from the batched document until this replaced it.
+func publishes(pl plan) bool {
+	if len(pl.missing) > 0 {
+		return false
+	}
+	return pl.state == StateAbsent || pl.republish
 }
 
 func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
@@ -227,6 +252,30 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 		plans = append(plans, pl)
 	}
 
+	// -republish turns "already live" from the end of the story into a reason
+	// to look closer. Only for packages the pattern actually named: a
+	// dependency was pulled in to satisfy an import, and replacing one because
+	// something else mentions it is not what anybody asked for.
+	republish := flagBool(fs, "republish")
+	if republish {
+		for i := range plans {
+			pl := &plans[i]
+			if pl.state != StateLive || pl.dep || len(pl.missing) > 0 {
+				continue
+			}
+			chk, err := checkRepublish(chain, e.Root, pl.pkg)
+			if err != nil {
+				return err
+			}
+			if !chk.eligible {
+				pl.skipped = chk.why
+				continue
+			}
+			pl.republish = true
+			pl.changed = chk.changed
+		}
+	}
+
 	// Every package already on chain, which is the only set whose declared
 	// `private` can be compared against anything. See privatecheck.go for why
 	// a flag that is merely wrong, on a package publish will not touch, is
@@ -278,18 +327,31 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	// package in the plan at all".
 	todo, blocked, live := 0, 0, 0
 	for _, pl := range plans {
-		acts := pl.state == StateAbsent || pl.state == StateParked || len(pl.missing) > 0
+		acts := pl.state == StateAbsent || pl.state == StateParked || len(pl.missing) > 0 ||
+			pl.republish || pl.skipped != ""
 		if e.Verbose || acts {
 			marker := ""
 			if pl.dep {
 				marker = "  (dependency)"
 			}
-			e.logf("\n%-8s %s%s\n", pl.state, pl.pkg.Module, marker)
+			state := string(pl.state)
+			if pl.republish {
+				state = "REPUBLISH"
+			}
+			e.logf("\n%-8s %s%s\n", state, pl.pkg.Module, marker)
 			e.logf("         %d bytes in %d file(s)", pl.bytes, len(pl.files))
 			if len(pl.files) > 0 {
 				e.logf(", largest %s at %d", pl.files[0].Name, pl.files[0].Size)
 			}
 			e.logf("\n")
+			if pl.republish {
+				e.logf("         replaces the copy on chain; %d file(s) differ: %s\n",
+					len(pl.changed), strings.Join(pl.changed, ", "))
+				e.logf("         a redeploy re-runs init() and RESETS realm state\n")
+			}
+			if pl.skipped != "" {
+				e.logf("         NOT republished: %s\n", pl.skipped)
+			}
 		}
 		for _, m := range pl.missing {
 			e.logf("         BLOCKED by %s: %s\n", m.module, m.why)
@@ -297,10 +359,13 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 		switch {
 		case len(pl.missing) > 0:
 			blocked++
-		case pl.state == StateAbsent:
+		case pl.state == StateAbsent, pl.republish:
 			todo++
 		case pl.state == StateParked:
 			e.logf("         waiting on an approver; do not send it again\n")
+		case pl.skipped != "":
+			// Already reported above, in full. Counting it as "nothing to do"
+			// would hide the one line the user ran -republish to read.
 		default:
 			live++
 		}
@@ -328,11 +393,18 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 			"gnomod.toml to match what is on chain, or publish a new version", n)
 	}
 	if todo == 0 {
-		e.logf("\nnothing to publish\n")
+		if republish {
+			e.logf("\nnothing to publish or republish\n")
+		} else {
+			e.logf("\nnothing to publish\n")
+		}
 		return nil
 	}
 
 	e.logf("\n%d package(s) to publish, in dependency order\n", todo)
+	if republish {
+		e.logf("         a REPUBLISH line above replaces a live package and resets its realm state\n")
+	}
 
 	// The handoff is an output, not a hard-coded assumption about where the
 	// key is. -o writes one document for one signature instead of N commands
@@ -371,7 +443,7 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	var cmds []publishCmd
 	var totalFee int64
 	for _, pl := range plans {
-		if pl.state != StateAbsent || len(pl.missing) > 0 {
+		if !publishes(pl) {
 			continue
 		}
 		gas := GasFor(pl.bytes)

@@ -38,7 +38,7 @@ func layerPlans(plans []plan, deps map[string][]string) ([][]plan, error) {
 	inSet := map[string]bool{}
 	var todo []plan
 	for _, pl := range plans {
-		if pl.state != StateAbsent || len(pl.missing) > 0 {
+		if !publishes(pl) {
 			continue
 		}
 		inSet[pl.pkg.Module] = true
