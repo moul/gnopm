@@ -745,24 +745,31 @@ Needs full git history. A shallow clone has none of the pinned commits.
 Makefile prerequisite calls; tidy is the one you run when you want it
 right, and it is allowed to cost git walks and chain reads.
 
-Four passes:
+Five passes:
 
   1. sync, so the lock describes the working tree and everything it
      pins is materialized.
-  2. drop a pinned version when nothing imports it AND its commit never
-     reached the default branch, which together mean it existed for
-     nobody outside the branch that made it.
+  2. drop a version nothing imports. For one pinned to git history that
+     needs a second condition, that its commit never reached the default
+     branch, because a branch commit can disappear and a version others
+     may depend on must not. A { chain } dependency needs no second
+     condition: the bytes are on a chain that cannot delete or redefine
+     them, so gnopm get brings the identical package back.
   3. verify, the expensive proof: every pinned version is re-read out of
      git history and re-hashed, so a rewritten or garbage-collected
      commit is caught here rather than by whoever's build breaks next.
      It runs after the drop, so it proves the tidied lock.
-  4. ask the chain which of these version numbers ever meant anything.
+  4. fetch an import that resolves nowhere and is live on the chain its
+     path names. Only live: a parked path is a submission an approver
+     can still reject, and an absent one is a typo, so both are reported
+     rather than recorded.
+  5. ask the chain which of these version numbers ever meant anything.
      A version can sit on the default branch for months having been
      published to nobody, and no local check can see that. Where a
      version is absent and so is the one below it, the bump between them
      was spent on nothing, and tidy names the unbump that folds it back.
 
-It writes only what is safe to write unasked. Pass 4 reports: folding a
+It writes only what is safe to write unasked. Pass 5 reports: folding a
 version away changes a package's identity, so that stays a deliberate
 gnopm unbump, one package at a time.
 
