@@ -14,13 +14,14 @@ jobs:
       # Full history and tags: goreleaser reads the tag it is building, and
       # `go build` stamps the version from VCS state, so a shallow clone
       # produces a binary that reports the wrong version.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.24"
+          cache: false
 
       # Prove the tag is green before publishing anything from it. CI already
       # ran on the commit, but a tag can be pushed at any commit, including one
