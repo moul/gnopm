@@ -130,9 +130,10 @@ var foreign = map[string]string{
 		"  a pinned version nothing imports any more",
 	"update": "gnopm has no `update`, and it is not an omission: a gno import path carries\n" +
 		"  its version, so nothing updates under you and there is no range to re-solve.\n" +
-		"  Moving to a newer version is changing the import",
+		"  Moving to a newer version is changing the import. `gnopm outdated` says\n" +
+		"  which of yours have one",
 	"upgrade": "gnopm has no `upgrade`: an import path carries its version, so nothing moves\n" +
-		"  under you. Moving to a newer version is changing the import",
+		"  under you. `gnopm outdated` says which of yours have a newer version",
 	"test":   "gnopm does not build or test; the toolchain does. `gno test ./...`",
 	"build":  "gnopm does not build; the toolchain does. `gno build ./...`",
 	"run":    "gnopm does not run code; the toolchain does. `gno run`",
