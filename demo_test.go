@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -75,5 +76,50 @@ func TestDemoScript(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(repo, "p/demo/strs/v0")); !os.IsNotExist(err) {
 		t.Error("p/demo/strs/v0 should have no directory after the migration")
+	}
+}
+
+// TestREADMENamesRealCommands walks every `gnopm <word>` in the README and
+// checks the command exists.
+//
+// The README is the most-read artifact in the repository and the one most
+// likely to promise something that was planned and never landed, or that was
+// renamed afterwards. This is the same guard
+// TestForeignAdviceNamesRealCommands applies to the cross-ecosystem table, and
+// it caught the same class of thing there twice.
+//
+// It shells out to the built binary rather than importing the command table,
+// because the root package deliberately holds no logic, and because `gnopm help
+// <command>` failing is the user-visible symptom this is about.
+func TestREADMENamesRealCommands(t *testing.T) {
+	// Deliberate mentions of commands that do not exist. Each one is a
+	// sentence explaining an absence, so the words are load-bearing and must
+	// not be "fixed" by adding the command.
+	absent := map[string]bool{
+		"update": true, // "there is no `gnopm update`", and there should not be
+		"help":   true, // real, but `gnopm help help` is not a topic
+	}
+
+	bin := filepath.Join(t.TempDir(), "gnopm")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("building gnopm: %v\n%s", err, out)
+	}
+	readme, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, m := range regexp.MustCompile("`gnopm ([a-z-]+)").FindAllStringSubmatch(string(readme), -1) {
+		name := m[1]
+		if seen[name] || absent[name] {
+			continue
+		}
+		seen[name] = true
+		if err := exec.Command(bin, "help", name).Run(); err != nil {
+			t.Errorf("the README says `gnopm %s`, which is not a command", name)
+		}
+	}
+	if len(seen) < 10 {
+		t.Errorf("only found %d commands in the README, so the pattern is probably wrong", len(seen))
 	}
 }

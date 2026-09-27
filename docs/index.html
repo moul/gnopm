@@ -148,13 +148,32 @@ the repository</a>, so none of them can quietly stop matching what the tool prin
   signs and never holds a key.</p></div>
 </div>
 
+<h2>Coming from npm, cargo, pip or go</h2>
+<pre><code>gnopm init                      # nothing else creates a gno workspace
+gnopm search avl                # the chain is the registry
+gnopm get gno.land/p/nt/tinyavl/v0
+gnopm tree</code></pre>
+<p>Three things are missing on purpose, and each removes a class of bug the other
+ecosystems still fight. <strong>No resolver</strong>: an import path contains its version, so
+two versions are two paths and there is no constraint to solve. <strong>No registry</strong>:
+the chain is the registry, so nothing can be operated, ranked, spammed or taken offline, and
+a search cannot disagree with what an import resolves to. <strong>No lockfile drift</strong>:
+a published path can never be redefined or withdrawn, so a content hash pins something that
+genuinely cannot change.</p>
+<p>Type <code>npm install</code>'s verbs at gnopm and it will tell you this itself rather
+than saying "unknown command".</p>
+
 <h2>Try it</h2>
-<pre><code>gnopm status      # what resolves, and whether anything is out of date
+<pre><code>gnopm init        # make this directory a workspace
+gnopm status      # what resolves, and whether anything is out of date
 gnopm sync        # make the state good
 gnopm bump md     # promote a package, in place; then edit the files
 gnopm unbump md   # take a number back, while nothing has published it
 gnopm ls          # every module and where its source is
 gnopm doc md      # the documentation, for any version, directory or not
+gnopm tree        # the dependency tree, in the terminal
+gnopm search avl  # find a published package on the chain
+gnopm outdated    # which imported versions have a newer one
 gnopm why md/v0   # who still imports this version
 gnopm verify      # prove every pinned version still reproduces (for CI)
 gnopm tidy        # make the whole workspace right, chain included
