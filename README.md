@@ -168,6 +168,20 @@ design and is wrong twice: the workspace scan deliberately does not descend into
 `vendor/`, because vendored code is not yours to bump or publish, and it would
 throw the provenance away.
 
+### `gnopm search`, because the chain is the registry
+
+```sh
+gnopm search gno.land/p/moul   # a path prefix, asked of the chain directly
+gnopm search @moul             # a namespace: both p/ and r/, resolved chain-side
+gnopm search avl               # a word, scanned over one page of paths
+```
+
+npm and cargo query a service somebody operates, which can rank, spam-filter, go
+down, and disagree with what you end up installing. Here it is a state query
+over the live key space, so the result is exact, unranked, and identical to what
+importing that path would resolve to. It works outside a workspace, because
+finding a package is what you do before you have one.
+
 ### `gnopm outdated`, which is cheap here and expensive everywhere else
 
 ```

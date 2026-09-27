@@ -8,9 +8,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -96,7 +98,11 @@ func newFakeChain(t *testing.T) *fakeChain {
 				`{"BaseAccount":{"address":%q,"coins":"1000000ugnot","public_key":null,"account_number":"7","sequence":"42"}}`, addr))
 			return
 		}
-		switch req.Params.Path {
+		// Dispatch on the path without its query string, which is what gno
+		// does: vm/qpaths reads ?limit= off the ABCI path, so the path that
+		// arrives is "vm/qpaths?limit=1000" and an exact match would 404 it.
+		abciPath, _, _ := strings.Cut(req.Params.Path, "?")
+		switch abciPath {
 		case "vm/qinertpaths":
 			if f.noInert {
 				writeABCIError(w, "/std.UnknownRequest", "unknown query path")
@@ -107,6 +113,24 @@ func newFakeChain(t *testing.T) *fakeChain {
 				paths = append(paths, p)
 			}
 			writeABCIData(w, strings.Join(paths, "\n"))
+		case "vm/qpaths":
+			// The live key space under a prefix, which is what search reads.
+			// The limit rides on the ABCI path as a query string, exactly as
+			// gno parses it, so a test can prove gnopm puts it there.
+			target := string(req.Params.Data)
+			f.mu.Lock()
+			var hits []string
+			for p := range f.live {
+				if strings.HasPrefix(p, target) {
+					hits = append(hits, p)
+				}
+			}
+			f.mu.Unlock()
+			sort.Strings(hits)
+			if n := pathsQueryLimit(req.Params.Path); n > 0 && len(hits) > n {
+				hits = hits[:n]
+			}
+			writeABCIData(w, strings.Join(hits, "\n"))
 		case "vm/qfile":
 			p := string(req.Params.Data)
 			// A package served with real source answers both shapes for real,
@@ -872,4 +896,22 @@ func TestProbeWarmReportsATransportFailureRatherThanAbsence(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("a failed batch cached %d state(s)", n)
 	}
+}
+
+// pathsQueryLimit reads ?limit= off an ABCI path the way gno's pathsLimit does,
+// so a test can tell whether gnopm sent the limit where the chain looks for it.
+func pathsQueryLimit(abciPath string) int {
+	_, after, ok := strings.Cut(abciPath, "?")
+	if !ok {
+		return 0
+	}
+	v, err := url.ParseQuery(after)
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.Atoi(v.Get("limit"))
+	if err != nil {
+		return 0
+	}
+	return n
 }
