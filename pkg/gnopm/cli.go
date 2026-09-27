@@ -410,6 +410,34 @@ empty.
 			run: cmdWhy,
 		},
 		{
+			name: "tree", args: "[package]...",
+			group:            "inspect",
+			completesModules: true,
+			short:            "the dependency tree, in the terminal",
+			long: `Prints the import graph as an indented tree, rooted at every package
+nothing else imports, or at the packages you name.
+
+The same graph gnopm graph draws. graph emits DOT, which is right for a
+file you pipe into graphviz or keep in CI; this is right for the
+question people actually ask, typed once and read once, on a machine
+with no graphviz.
+
+A dependency outside gnomod.lock is marked "(not in this workspace)".
+It is not hidden on purpose: that is exactly what gnopm publish calls a
+blocker, and a tree that disagreed with publish would be worse than no
+tree.
+
+  -ascii  box-drawing characters replaced by ASCII, for a terminal that
+          lies about its encoding
+  -all    expand a subtree every time it appears instead of marking the
+          repeat with (*)`,
+			flags: func(fs *flag.FlagSet) {
+				fs.Bool("ascii", false, "draw with ASCII instead of box-drawing characters")
+				fs.Bool("all", false, "expand repeated subtrees instead of marking them")
+			},
+			run: cmdTree,
+		},
+		{
 			name: "graph", args: "[package]",
 			group:            "inspect",
 			completesModules: true,

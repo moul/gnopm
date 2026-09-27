@@ -356,6 +356,26 @@ GNOPM_CACHE=off gnopm …   # the same, for a whole shell; or point it elsewhere
 gnopm env                 # where the cache is, among everything else gnopm worked out
 ```
 
+## Trees and graphs
+
+```sh
+gnopm tree                 # what everything pulls in, in the terminal
+gnopm tree r/moul/home     # rooted at one package
+gnopm tree -ascii          # for a terminal that lies about its encoding
+```
+
+```
+gno.land/r/demo/board/v0
+├── gno.land/p/demo/strs/v1
+└── gno.land/p/demo/table/v0
+    ├── gno.land/p/demo/strs/v0
+    └── gno.land/p/nt/tinyavl/v0  (vendored, not in the lock)
+```
+
+An import that resolves nowhere is marked rather than hidden, because that is
+exactly what `gnopm publish` calls a blocker, and a tree that quietly omits what
+breaks your deploy is worse than no tree.
+
 ## Graphs
 
 ```sh
