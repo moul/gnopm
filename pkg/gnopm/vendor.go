@@ -51,6 +51,17 @@ func vendored(root, module, want string) bool {
 	return err == nil && h != "" && h == want
 }
 
+// vendorExists reports whether a module has a directory under vendor/, without
+// asking whether it is the right one.
+//
+// Distinct from `vendored`, which checks the hash: this answers "is there
+// something there", which is what a report aimed at a human needs when the
+// alternative is telling them a directory they can see does not exist.
+func vendorExists(root, module string) bool {
+	st, err := os.Stat(vendorPathOf(root, module))
+	return err == nil && st.IsDir()
+}
+
 // Vendor copies every chain dependency into vendor/ and commits nothing.
 //
 // Writing the files is the whole operation: the lock already records what they
