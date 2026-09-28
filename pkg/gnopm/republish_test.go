@@ -119,7 +119,7 @@ func TestCheckRepublishWantsBothHalves(t *testing.T) {
 			root := republishTree(t, dir, module, true, tc.localFiles)
 			c := withOverrides(&Chain{}, f.srv.URL, "test-1")
 
-			got, err := checkRepublish(c, root, Package{Dir: dir, Module: module})
+			got, err := checkRepublish(c, root, Package{Dir: dir, Module: module}, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -156,7 +156,7 @@ func TestCheckRepublishRefusesAPreGnomodPackage(t *testing.T) {
 	root := republishTree(t, "r/moul/old", module, true, map[string]string{"old.gno": "package old\n// new\n"})
 	c := withOverrides(&Chain{}, f.srv.URL, "test-1")
 
-	got, err := checkRepublish(c, root, Package{Dir: "r/moul/old", Module: module})
+	got, err := checkRepublish(c, root, Package{Dir: "r/moul/old", Module: module}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

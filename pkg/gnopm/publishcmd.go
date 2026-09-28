@@ -257,18 +257,23 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	// dependency was pulled in to satisfy an import, and replacing one because
 	// something else mentions it is not what anybody asked for.
 	republish := flagBool(fs, "republish")
+	includeDocs := flagBool(fs, "republish-docs")
+	if includeDocs {
+		republish = true
+	}
 	if republish {
 		for i := range plans {
 			pl := &plans[i]
 			if pl.state != StateLive || pl.dep || len(pl.missing) > 0 {
 				continue
 			}
-			chk, err := checkRepublish(chain, e.Root, pl.pkg)
+			chk, err := checkRepublish(chain, e.Root, pl.pkg, includeDocs)
 			if err != nil {
 				return err
 			}
 			if !chk.eligible {
 				pl.skipped = chk.why
+				pl.changed = chk.changed
 				continue
 			}
 			pl.republish = true
@@ -350,6 +355,10 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 				e.logf("         a redeploy re-runs init() and RESETS realm state\n")
 			}
 			if pl.skipped != "" {
+				if len(pl.changed) > 0 {
+					e.logf("         %d file(s) differ: %s\n",
+						len(pl.changed), strings.Join(pl.changed, ", "))
+				}
 				e.logf("         NOT republished: %s\n", pl.skipped)
 			}
 		}

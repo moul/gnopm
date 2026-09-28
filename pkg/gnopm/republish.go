@@ -47,7 +47,7 @@ type republishCheck struct {
 // list, then one per differing name. That is more round trips than the rest of
 // publish spends on a package, and it is why this runs only for packages the
 // pattern selected and only under -republish.
-func checkRepublish(c *Chain, root string, p Package) (republishCheck, error) {
+func checkRepublish(c *Chain, root string, p Package, includeDocs bool) (republishCheck, error) {
 	private, ok, err := chainPrivate(c, p.Module)
 	if err != nil {
 		return republishCheck{}, err
@@ -78,6 +78,19 @@ func checkRepublish(c *Chain, root string, p Package) (republishCheck, error) {
 	if len(changed) == 0 {
 		return republishCheck{why: "identical to the chain's copy, byte for byte: " +
 			"a redeploy would spend gas and reset realm state to arrive where it already is"}, nil
+	}
+	// A documentation-only difference is reported, with the files named, and
+	// not proposed. See republishclass.go: the README travels in the payload
+	// and is edited far more often than the code beside it, so without this a
+	// typo fix reads exactly like a code change and the only way to clear it is
+	// to wipe the realm's state.
+	if !includeDocs && docsOnly(changed) {
+		return republishCheck{
+			changed: changed,
+			why: "documentation only, not worth a state wipe: a redeploy re-runs init() " +
+				"and resets realm state, and nothing here changes what the realm does. " +
+				"-republish-docs includes it anyway",
+		}, nil
 	}
 	return republishCheck{eligible: true, changed: changed}, nil
 }

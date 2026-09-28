@@ -572,6 +572,7 @@ at the first failure.
   gnopm publish -one-tx-per-package   # a transaction each, the unbatched shape
   gnopm publish -o tx.json            # write the documents somewhere of your own
   gnopm publish -republish moul/home  # replace a live private realm with the tree's copy
+  gnopm publish -republish-docs …     # ... even when only the README moved
 
 Layers are what is batched, not the whole graph. Messages in one transaction do
 share a store and run in order, so in principle a dependent could follow its
@@ -652,6 +653,23 @@ version you are about to publish.
                    identical bytes spends gas and resets state to arrive where
                    it already was.
 
+               A difference that is ONLY documentation is reported, with the
+               files named, and not proposed. addpkg uploads every .md in the
+               package directory, so a README travels on chain and is edited far
+               more often than the code beside it: without this, correcting a
+               sentence of prose leaves the realm reading as out of date until
+               somebody wipes its state, and a typo fix looks exactly like a code
+               change in the report.
+
+               The rule is the narrowest one that fixes that: documentation
+               means a name ending in .md, and nothing else. Notably NOT "files
+               that cannot change behaviour", which would also cover test files:
+               that is an argument about the VM, and being wrong about it costs
+               refusing to publish something the author wanted.
+
+  -republish-docs
+               include it anyway. Implies -republish.
+
                ⚠️ A redeploy re-runs init() and RESETS realm state. Everything
                the realm accumulated since it went up is gone. Nothing gnopm can
                read says whether that mattered, which is why this is a flag and
@@ -673,6 +691,7 @@ version you are about to publish.
 				fs.String("addr", "", "the creator address (default: asked of `gnokey list`)")
 				fs.Bool("one-tx-per-package", false, "a transaction each, instead of one per dependency layer")
 				fs.Bool("republish", false, "also replace a live package whose source has changed, when the chain's copy is private")
+				fs.Bool("republish-docs", false, "with -republish, include a package whose only changes are .md files")
 			},
 			run: cmdPublish,
 		},

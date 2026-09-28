@@ -469,6 +469,28 @@ Both halves are checked, and the report names whichever one said no:
 - the source must actually differ. Re-sending identical bytes costs gas and
   resets state to arrive where it already was.
 
+A difference that is **only documentation** is reported, with the files named,
+and not proposed:
+
+```
+live     gno.land/r/moul/home
+         1 file(s) differ: README.md
+         NOT republished: documentation only, not worth a state wipe …
+```
+
+`addpkg` uploads every `.md` in the package directory, so a README travels on
+chain, and it is edited far more often than the code beside it. On
+`gno.land/r/moul/home` it is 38% of the payload. Without this rule, correcting a
+sentence of prose leaves the realm reading as out of date against its own repo
+until somebody wipes its state, and a typo fix looks exactly like a code change
+in the report. `-republish-docs` includes it anyway.
+
+The rule is the narrowest one that fixes that: **documentation means a name
+ending in `.md`**, and nothing else. Notably *not* "files that cannot change
+behaviour", which would also cover test files: that is an argument about what
+the VM runs, and being wrong about it costs refusing to publish a change
+somebody wanted.
+
 > ⚠️ A redeploy re-runs `init()` and **resets realm state**. Whatever the realm
 > accumulated since it went up is gone. Nothing gnopm can read says whether that
 > mattered, which is why this is a flag and not a default.
