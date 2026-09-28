@@ -1,6 +1,7 @@
 package gnopm
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -201,5 +202,204 @@ func TestCheckPrivateSkipsAPackageTheChainHasNoGnomodFor(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("a package with no chain copy was reported: %+v", got)
+	}
+}
+
+// sharedCacheEnv is two Envs over ONE cache directory, which is what two
+// consecutive gnopm runs on the same machine actually are. A fresh t.TempDir()
+// per Env, as probeEnv gives, cannot show that anything was remembered.
+func sharedCacheEnv(t *testing.T) (dir string, next func() *Env) {
+	t.Helper()
+	dir = t.TempDir()
+	return dir, func() *Env {
+		return &Env{Out: io.Discard, Errw: io.Discard, CacheDir: dir}
+	}
+}
+
+// TestCheckPrivateAsksTheChainOnce is the regression test for the defect that
+// made this cache necessary.
+//
+// The first cut re-read `<path>/gnomod.toml` for every live package on every
+// run and kept nothing. On a 243-package workspace that is 243 extra queries
+// per publish, and two whole-workspace runs in quick succession was enough for
+// rpc.gno.land to answer this host 403 on everything, /status included.
+//
+// The answer cannot change (cache.go says why, with the chain's own source), so
+// the second run must not touch the chain at all.
+func TestCheckPrivateAsksTheChainOnce(t *testing.T) {
+	const module = "gno.land/r/moul/faucet/v0"
+	f := newFakeChain(t)
+	f.live[module] = true // live, public on chain
+	root := privateTree(t, "r/moul/faucet", module, true)
+	c := withOverrides(&Chain{}, f.srv.URL, "test-1")
+	pkgs := []Package{{Dir: "r/moul/faucet", Module: module}}
+
+	_, newEnv := sharedCacheEnv(t)
+
+	first, err := CheckPrivate(newEnv(), c, root, pkgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cold := f.count()
+	if cold == 0 {
+		t.Fatal("the first run asked the chain nothing, so this proves nothing")
+	}
+
+	second, err := CheckPrivate(newEnv(), c, root, pkgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if warm := f.count(); warm != cold {
+		t.Fatalf("the second run asked the chain %d more time(s); the answer cannot change", warm-cold)
+	}
+	// And it is the same verdict, not merely a quiet one: a cache that
+	// forgets the mismatch is worse than no cache.
+	if len(first) != 1 || len(second) != 1 || first[0] != second[0] {
+		t.Fatalf("cold and warm disagree:\n cold %+v\n warm %+v", first, second)
+	}
+}
+
+// TestCheckPrivateRemembersEveryAnswer: all three states have to survive a
+// round trip, including "the chain has no gnomod.toml there".
+//
+// That third one is cacheable for the same reason as the others: a path with no
+// gnomod.toml is not private, and AddPackage refuses to redeploy a non-private
+// live path at all, so it can never grow one.
+func TestCheckPrivateRemembersEveryAnswer(t *testing.T) {
+	f := newFakeChain(t)
+	// public on chain, private in repo -> a mismatch
+	f.live["gno.land/r/moul/a/v0"] = true
+	// private on chain, private in repo -> agreement
+	f.live["gno.land/r/moul/b/v0"] = true
+	f.private["gno.land/r/moul/b/v0"] = true
+	// no chain copy at all, so the chain has no gnomod.toml to disagree with,
+	// which is the third state and the one a bool could not hold
+	// (r/moul/c/v0 is deliberately absent from f.live)
+
+	root := t.TempDir()
+	var pkgs []Package
+	for _, n := range []string{"a", "b", "c"} {
+		dir := filepath.Join(root, "r", "moul", n)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		body := "module = \"gno.land/r/moul/" + n + "/v0\"\ngno = \"0.9\"\nprivate = true\n"
+		if err := os.WriteFile(filepath.Join(dir, "gnomod.toml"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		pkgs = append(pkgs, Package{Dir: "r/moul/" + n, Module: "gno.land/r/moul/" + n + "/v0"})
+	}
+	c := withOverrides(&Chain{}, f.srv.URL, "test-1")
+	dir, newEnv := sharedCacheEnv(t)
+
+	cold, err := CheckPrivate(newEnv(), c, root, pkgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asked := f.count()
+
+	warm, err := CheckPrivate(newEnv(), c, root, pkgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := f.count(); n != asked {
+		t.Fatalf("the warm run asked %d more time(s)", n-asked)
+	}
+	if len(cold) != 1 || len(warm) != 1 || cold[0] != warm[0] {
+		t.Fatalf("cold %+v, warm %+v: only r/moul/a disagrees, both times", cold, warm)
+	}
+
+	// The file holds one line per path, with its state, and nothing else.
+	got := map[string]privateState{}
+	for _, line := range strings.Split(read(t, filepath.Join(dir, "private", "test-1")), "\n") {
+		if st, path, ok := strings.Cut(strings.TrimSpace(line), " "); ok {
+			got[path] = privateState(st)
+		}
+	}
+	want := map[string]privateState{
+		"gno.land/r/moul/a/v0": privatePublic,
+		"gno.land/r/moul/b/v0": privatePrivate,
+		"gno.land/r/moul/c/v0": privateAbsent,
+	}
+	for path, st := range want {
+		if got[path] != st {
+			t.Fatalf("%s cached as %q, want %q (all of %v)", path, got[path], st, got)
+		}
+	}
+}
+
+// TestPrivateCacheSurvivesAGarbledFile: the file is append-only and never
+// rewritten, so a write torn by a crash leaves a partial line. That has to read
+// as "not asked yet", never as an answer.
+func TestPrivateCacheSurvivesAGarbledFile(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "private", "test-1"),
+		"private gno.land/r/moul/good/v0\n"+
+			"gno.land/r/moul/nospace/v0\n"+ // no state
+			"sideways gno.land/r/moul/bogus/v0\n"+ // a state from no version of gnopm
+			"public \n"+ // no path
+			"public gno.land/r/moul/also/v0\n")
+
+	c := openPrivateCache(dir, "test-1")
+	if st, ok := c.lookup("gno.land/r/moul/good/v0"); !ok || st != privatePrivate {
+		t.Fatalf("a good line was lost: %q %v", st, ok)
+	}
+	if st, ok := c.lookup("gno.land/r/moul/also/v0"); !ok || st != privatePublic {
+		t.Fatalf("a good line after a bad one was lost: %q %v", st, ok)
+	}
+	for _, path := range []string{"gno.land/r/moul/nospace/v0", "gno.land/r/moul/bogus/v0"} {
+		if _, ok := c.lookup(path); ok {
+			t.Fatalf("%s was answered from a garbled line", path)
+		}
+	}
+}
+
+// TestPrivateCacheNeverPersistsDev mirrors the rule liveCache already keeps: a
+// gnodev restart wipes the chain and reuses the id, so nothing keyed on it may
+// outlive the run.
+func TestPrivateCacheNeverPersistsDev(t *testing.T) {
+	dir := t.TempDir()
+	for _, id := range []string{devChainID, ""} {
+		c := openPrivateCache(dir, id)
+		c.learn("gno.land/r/moul/a/v0", privatePrivate)
+		if f := c.where(); f != "" {
+			t.Fatalf("chain id %q persisted to %s", id, f)
+		}
+		// It still answers within the run, which is all a dev chain needs.
+		if st, ok := c.lookup("gno.land/r/moul/a/v0"); !ok || st != privatePrivate {
+			t.Fatalf("chain id %q did not answer from memory", id)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "private")); !os.IsNotExist(err) {
+		t.Fatalf("a directory was created for a chain that must not persist: %v", err)
+	}
+}
+
+// TestCheckPrivateWithNoCacheStillWorks: -no-cache and a machine with no home
+// both give an empty CacheDir, and the check has to stay correct there, just
+// slower.
+func TestCheckPrivateWithNoCacheStillWorks(t *testing.T) {
+	const module = "gno.land/r/moul/faucet/v0"
+	f := newFakeChain(t)
+	f.live[module] = true
+	root := privateTree(t, "r/moul/faucet", module, true)
+	c := withOverrides(&Chain{}, f.srv.URL, "test-1")
+	pkgs := []Package{{Dir: "r/moul/faucet", Module: module}}
+	env := func() *Env { return &Env{Out: io.Discard, Errw: io.Discard} } // no CacheDir
+
+	first, err := CheckPrivate(env(), c, root, pkgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cold := f.count()
+	second, err := CheckPrivate(env(), c, root, pkgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.count() == cold {
+		t.Fatal("-no-cache reused an answer across runs")
+	}
+	if len(first) != 1 || len(second) != 1 || first[0] != second[0] {
+		t.Fatalf("the verdict changed without a cache: %+v vs %+v", first, second)
 	}
 }

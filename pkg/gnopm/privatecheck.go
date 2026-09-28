@@ -26,9 +26,16 @@ import (
 //
 // publish is where the comparison belongs because publish is the one command
 // already holding both halves: it reads the workspace to build a payload and
-// the chain to decide what is absent. The extra cost is one vm/qfile per
-// package that is already live, and live packages are exactly the ones it
-// otherwise does nothing with.
+// the chain to decide what is absent.
+//
+// The chain half is asked once per path and then remembered. The first cut of
+// this check re-asked for every live package on every run, which on a
+// 243-package workspace is 243 extra queries per publish that the disk cache
+// did not absorb, and two whole-workspace runs in quick succession was enough
+// for rpc.gno.land to start answering this host 403 on everything. The irony
+// was exact: probeConcurrency carries a comment saying a stranger's node is not
+// ours to hammer, and this honoured the concurrency while defeating the point.
+// The answer cannot change (see cache.go), so it belongs on disk.
 
 // privateMismatch is one package whose declared `private` disagrees with the
 // copy the chain holds at the same path.
@@ -97,16 +104,39 @@ func CheckPrivate(e *Env, c *Chain, root string, live []Package) ([]privateMisma
 	if len(live) == 0 {
 		return nil, nil
 	}
+	cached := openPrivateCache(e.cacheDir(), c.ID)
+
+	// Split before spawning anything: a path the cache already knows needs no
+	// worker, no round trip and no concurrency slot. On a warm workspace this
+	// empties the queue entirely and the chain is not touched at all.
+	var ask []Package
+	var out []privateMismatch
+	for _, p := range live {
+		st, ok := cached.lookup(p.Module)
+		if !ok {
+			ask = append(ask, p)
+			continue
+		}
+		if m, mismatch := comparePrivate(root, p, st); mismatch {
+			out = append(out, m)
+		}
+	}
+	if len(ask) == 0 {
+		sort.Slice(out, func(i, j int) bool { return out[i].module < out[j].module })
+		e.tracef("private  %d live package(s), all remembered from %s, %d disagree\n",
+			len(live), cacheOrMemory(cached), len(out))
+		return out, nil
+	}
+
 	var (
 		mu   sync.Mutex
-		out  []privateMismatch
 		bad  error
 		work = make(chan Package)
 		wg   sync.WaitGroup
 	)
 	workers := probeConcurrency
-	if len(live) < workers {
-		workers = len(live)
+	if len(ask) < workers {
+		workers = len(ask)
 	}
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
@@ -120,18 +150,28 @@ func CheckPrivate(e *Env, c *Chain, root string, live []Package) ([]privateMisma
 					if bad == nil {
 						bad = err
 					}
-				case !ok:
-					// No gnomod.toml on chain: nothing to compare.
-				case onChain != repoPrivate(root, p):
-					out = append(out, privateMismatch{
-						module: p.Module, inRepo: !onChain, onChain: onChain,
-					})
+				default:
+					st := privateAbsent
+					if ok {
+						st = privatePublic
+						if onChain {
+							st = privatePrivate
+						}
+					}
+					// Learn before comparing: the answer is the chain's and is
+					// worth keeping whether or not it disagrees with the repo,
+					// and the repo half can change between runs while this
+					// cannot.
+					cached.learn(p.Module, st)
+					if m, mismatch := comparePrivate(root, p, st); mismatch {
+						out = append(out, m)
+					}
 				}
 				mu.Unlock()
 			}
 		}()
 	}
-	for _, p := range live {
+	for _, p := range ask {
 		mu.Lock()
 		stop := bad != nil
 		mu.Unlock()
@@ -146,6 +186,34 @@ func CheckPrivate(e *Env, c *Chain, root string, live []Package) ([]privateMisma
 		return nil, bad
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].module < out[j].module })
-	e.tracef("private  compared %d live package(s) against %s, %d disagree\n", len(live), c.ID, len(out))
+	_, hits, learned := cached.stats()
+	e.tracef("private  compared %d live package(s) against %s, %d disagree (%d asked, %d remembered, %d learned)\n",
+		len(live), c.ID, len(out), len(ask), hits, learned)
 	return out, nil
+}
+
+// comparePrivate turns one chain answer into a mismatch, or not.
+//
+// Split out because the cached path and the freshly-queried path have to reach
+// the same verdict, and two copies of a comparison eventually disagree.
+func comparePrivate(root string, p Package, st privateState) (privateMismatch, bool) {
+	if st == privateAbsent {
+		// No gnomod.toml on chain: nothing to compare.
+		return privateMismatch{}, false
+	}
+	onChain := st == privatePrivate
+	if onChain == repoPrivate(root, p) {
+		return privateMismatch{}, false
+	}
+	return privateMismatch{module: p.Module, inRepo: !onChain, onChain: onChain}, true
+}
+
+// cacheOrMemory names where the answers came from, for -v. A cache with no file
+// still answers within a run, and saying "the cache" when nothing persists
+// would make a warm-looking run impossible to tell from a cold one.
+func cacheOrMemory(c *privateCache) string {
+	if f := c.where(); f != "" {
+		return f
+	}
+	return "memory"
 }
