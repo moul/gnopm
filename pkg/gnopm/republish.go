@@ -136,10 +136,16 @@ func diffSource(local, onChain map[string]string) []string {
 	var out []string
 	for name, body := range local {
 		seen[name] = true
-		switch other, ok := onChain[name]; {
+		other, ok := onChain[name]
+		switch {
 		case !ok:
 			out = append(out, name+" (new)")
-		case other != body:
+		// Compared through normalizeForCompare, because the chain rewrites
+		// gnomod.toml rather than storing what it was sent. See gnomodnorm.go:
+		// a byte comparison marks that file as changed forever, for every
+		// package, which is how this check first reported drift on a realm
+		// redeployed minutes earlier.
+		case normalizeForCompare(name, other) != normalizeForCompare(name, body):
 			out = append(out, name)
 		}
 	}
