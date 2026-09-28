@@ -724,17 +724,41 @@ re-reads every pinned version out of git history and re-hashes it, so a
 rewritten or garbage-collected commit is caught rather than discovered
 much later by somebody whose build stopped working.
 
+-deployed asks a different question, and the one no local check can
+answer: are the bytes running on the chain the bytes in this tree. It
+reads every live package back with vm/qfile and compares it against
+exactly what addpkg would upload. A build can be reproducible and still
+be deploying something nobody reviewed.
+
+It runs instead of the local proof rather than in addition, so the
+cheap check never becomes hostage to a chain being reachable. A
+published path cannot be redefined, so a mismatch is real rather than a
+race, and the fix is always a new version.
+
 Needs full git history. A shallow clone has none of the pinned commits.
 
   -upstream <ref>  additionally require every pinned commit to be reachable
                    from <ref>. A pin to a commit that exists only on this
                    branch dies when the branch is squash-merged, so CI runs
-                   this with -upstream origin/main.`,
+                   this with -upstream origin/main.
+  -deployed        compare every live package with the chain instead
+  -rpc, -chainid   skip chain discovery, for a local gnodev`,
 			flags: func(fs *flag.FlagSet) {
 				fs.String("upstream", "", "also require every pin to be reachable from this ref (for CI on a pull request)")
+				fs.Bool("deployed", false, "read every live package back off the chain and compare it with the tree")
+				fs.String("rpc", "", "chain rpc endpoint, skipping discovery")
+				fs.String("chainid", "", "chain id, skipping discovery")
 			},
 			run: func(e *Env, fs *flag.FlagSet, args []string) error {
-				return VerifyWith(e, fs.Lookup("upstream").Value.String())
+				if flagBool(fs, "deployed") {
+					// On its own, not in addition. The local proof is about
+					// this repository being internally consistent and needs no
+					// network at all; this is a different question with a
+					// different cost, and folding them together would make the
+					// cheap check hostage to a chain being reachable.
+					return VerifyDeployed(e, flagString(fs, "rpc"), flagString(fs, "chainid"))
+				}
+				return VerifyWith(e, flagString(fs, "upstream"))
 			},
 		},
 		{

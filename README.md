@@ -555,6 +555,29 @@ old one resolvable. It changes only on add, remove or bump. Named after the
 manifest rather than the tool, at the workspace root only, as every ecosystem
 does it.
 
+### Is what is deployed what is committed?
+
+```sh
+gnopm verify -deployed
+```
+
+Every other check here proves this repository is internally consistent. None of
+them can see the thing that matters once a package ships: whether the bytes
+running on a chain are the bytes in this commit. `-deployed` reads every live
+package back with `vm/qfile` and compares it against exactly what `addpkg` would
+upload.
+
+```
+differs  gno.land/r/moul/x/reaper/v0
+           on gnoland-1: h1:9wTXRGELUtWEqj7BWHLulrwxW7k4f7qGy8HkG4Pdm/Q=
+           in the tree:  h1:HyxVeE4ACsIKo3JPGU5vGsRGRgaAHT9rtS9/XJSQ2AE=
+```
+
+A published path cannot be redefined, so a mismatch is real rather than a race,
+and the chain will never catch up on its own: the fix is always a new version.
+It runs instead of the local proof rather than in addition, so the cheap check
+never becomes hostage to a chain being reachable.
+
 **Pins go to a commit already on the default branch.** Most repositories
 squash-merge, so a pin to a branch commit stops resolving once the change lands.
 `verify` catches that early, and it is the failure worth having:
