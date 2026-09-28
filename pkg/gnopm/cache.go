@@ -8,14 +8,35 @@ import (
 	"time"
 )
 
-// What gnopm remembers between runs, and why it is only ever one thing.
+// What gnopm remembers between runs, and why only two things qualify.
 //
-// `gnopm publish` over a workspace with two hundred packages is two hundred
+// `gnopm publish` over a workspace with two hundred packages is hundreds of
 // blocking vm/qfile reads, and nearly every one re-establishes a fact that
-// cannot change. A package path that is live on a chain stays live: there is no
+// cannot change. The bar for the disk is therefore not "expensive to fetch", it
+// is **cannot ever turn out to be wrong**, because a cache entry is consulted
+// on a run that will emit a transaction.
+//
+// Two answers clear it.
+//
+// **live.** A package path that is live on a chain stays live: there is no
 // delete, and addpkg on an occupied path fails, so its bytes can never be
-// redefined either. That makes "live" a permanent property of (chain id, path),
-// and the only chain answer worth keeping on disk.
+// redefined either.
+//
+// **private.** Whether the chain's copy of a live path declares `private` is
+// fixed at the moment it first goes up, in both directions, and the chain's own
+// source says so (read against gno master on 2026-09-28):
+//
+//   - public stays public. AddPackage refuses any redeploy of a non-private
+//     live path outright, `if !pv.Private { return ErrPkgAlreadyExists }`
+//     (gno.land/pkg/sdk/vm/keeper.go). The path is frozen entirely, gnomod.toml
+//     included, so a package with no gnomod.toml on chain can never grow one.
+//   - private stays private. A private path CAN be redeployed, so its gnomod
+//     content can change, but not that line: checkGnomodConstraints refuses
+//     `priorPrivate && !gm.Private` as "a private package cannot be overridden
+//     by a public package" (same file).
+//
+// So `private(chain, path)` is a permanent property of a permanent path, which
+// is a stronger guarantee than the one `live` already rests on.
 //
 // Nothing else qualifies. Parked is a submission still waiting on an approver,
 // so it can still be enabled or rejected. Absent is the state of the very
@@ -266,4 +287,137 @@ func discoveryFile(dir, host string) string {
 		return ""
 	}
 	return filepath.Join(dir, "hosts", name)
+}
+
+// privateState is what a chain said about one path's `private` flag.
+//
+// Three values, not a bool, because "the chain has no gnomod.toml there" is a
+// real answer and not a missing one: a package published before gnomod.toml
+// replaced gno.mod has none, and there is nothing to disagree with. It is
+// cacheable for the same reason the other two are, since a path with no
+// gnomod.toml is by definition not private and therefore frozen.
+type privateState string
+
+const (
+	privatePublic  privateState = "public"
+	privatePrivate privateState = "private"
+	privateAbsent  privateState = "none"
+)
+
+func (s privateState) valid() bool {
+	return s == privatePublic || s == privatePrivate || s == privateAbsent
+}
+
+// privateCache is the set of `private` answers one chain has already given.
+//
+// Same shape as liveCache, and deliberately so: one append-only file per chain,
+// never rewritten, so two concurrent gnopm runs cannot clobber each other and a
+// write torn by a crash leaves a partial line that parses to nothing, which is
+// a miss rather than a wrong answer. The only difference is that a line carries
+// a state as well as a path, because unlike "live" the answer here has three
+// values and the absence of a line is what means "not asked yet".
+type privateCache struct {
+	file string
+
+	mu      sync.Mutex
+	state   map[string]privateState
+	start   int
+	hits    int
+	learned int
+}
+
+// openPrivateCache loads the cache for one chain. It never fails: an unreadable
+// or absent file is an empty cache, and an empty cache is correct, just slower.
+func openPrivateCache(dir, chainID string) *privateCache {
+	c := &privateCache{state: map[string]privateState{}}
+	if dir == "" || chainID == "" || chainID == devChainID {
+		return c
+	}
+	name := cacheFileName(chainID)
+	if name == "" {
+		return c
+	}
+	c.file = filepath.Join(dir, "private", name)
+	b, err := os.ReadFile(c.file)
+	if err != nil {
+		return c
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		st, path, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok {
+			continue
+		}
+		// An unknown state is a line from a newer gnopm, or a torn write.
+		// Skipping it costs one query and cannot mislead.
+		if s := privateState(st); s.valid() && path != "" {
+			c.state[path] = s
+		}
+	}
+	c.start = len(c.state)
+	return c
+}
+
+// lookup returns what this chain already said about a path, and whether it said
+// anything at all. A hit is counted, so -v can report what the cache saved.
+func (c *privateCache) lookup(path string) (privateState, bool) {
+	if c == nil {
+		return "", false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st, ok := c.state[path]
+	if ok {
+		c.hits++
+	}
+	return st, ok
+}
+
+// learn records an answer and appends it straight away, for the same reason
+// liveCache does: a run killed half way through keeps what it learned, and a
+// flush at the end is the version somebody forgets to call.
+func (c *privateCache) learn(path string, st privateState) {
+	if c == nil || !st.valid() {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, seen := c.state[path]; seen {
+		return
+	}
+	c.state[path] = st
+	c.learned++
+	if c.file == "" {
+		return
+	}
+	// A cache that cannot be written is still a correct cache, so every failure
+	// here disables persistence for the rest of the run and says nothing.
+	if err := os.MkdirAll(filepath.Dir(c.file), 0o755); err != nil {
+		c.file = ""
+		return
+	}
+	f, err := os.OpenFile(c.file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		c.file = ""
+		return
+	}
+	defer f.Close()
+	if _, err := f.WriteString(string(st) + " " + path + "\n"); err != nil {
+		c.file = ""
+	}
+}
+
+func (c *privateCache) stats() (start, hits, learned int) {
+	if c == nil {
+		return 0, 0, 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.start, c.hits, c.learned
+}
+
+func (c *privateCache) where() string {
+	if c == nil {
+		return ""
+	}
+	return c.file
 }
