@@ -220,6 +220,14 @@ func planDeversion(pkgs []Package) ([]move, []drop, error) {
 	}
 	sort.Strings(targets)
 
+	// Collect every collision before reporting any, rather than returning at
+	// the first. Measured on gnolang/gno's examples/ (325 packages,
+	// 2026-09-28): a migration that blocks tells you about one directory at a
+	// time, so you fix it, re-run, and find the next. On a tree that size you
+	// cannot even see how big the job is before starting it, which is the
+	// difference between a decision and a treadmill.
+	var collisions []string
+
 	for _, target := range targets {
 		cands := byTarget[target]
 		// Highest version wins the unversioned directory: it is the one being
@@ -233,8 +241,9 @@ func planDeversion(pkgs []Package) ([]move, []drop, error) {
 		if cur, ok := atDir[target]; ok {
 			_, curN, curOK := splitVersion(cur.Module)
 			if !curOK || curN >= cands[0].n {
-				return nil, nil, fmt.Errorf("%s declares %s and %s declares %s: the directory would have to hold both, "+
-					"and the newer one is not newer", target, cur.Module, cands[0].pkg.Dir, cands[0].pkg.Module)
+				collisions = append(collisions, fmt.Sprintf("  %s declares %s, and %s declares %s",
+					target, cur.Module, cands[0].pkg.Dir, cands[0].pkg.Module))
+				continue
 			}
 			m.Replaces = target
 		}
@@ -242,6 +251,14 @@ func planDeversion(pkgs []Package) ([]move, []drop, error) {
 		for _, c := range cands[1:] {
 			drops = append(drops, drop{Dir: c.pkg.Dir, Module: c.pkg.Module})
 		}
+	}
+	if len(collisions) > 0 {
+		sort.Strings(collisions)
+		return nil, nil, fmt.Errorf("%d director%s would have to hold two packages, and the newer one is not newer:\n%s\n"+
+			"  Each is a package that exists both unversioned and under a /vN, so lifting the\n"+
+			"  versioned one has nowhere to land. Decide which is current, remove the other,\n"+
+			"  and re-run. Nothing has been moved.",
+			len(collisions), plural(len(collisions), "y", "ies"), strings.Join(collisions, "\n"))
 	}
 	sort.Slice(moves, func(i, j int) bool { return moves[i].From < moves[j].From })
 	sort.Slice(drops, func(i, j int) bool { return drops[i].Dir < drops[j].Dir })

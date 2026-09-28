@@ -1348,3 +1348,46 @@ func TestNoPackageErrorNamesTheCommandYouRan(t *testing.T) {
 		}
 	}
 }
+
+// TestDeversionReportsEveryCollision.
+//
+// It used to return at the first, so a blocked migration told you about one
+// directory, and you fixed it, re-ran, and found the next. Found by running
+// deversion on gnolang/gno's examples/ (325 packages, 2026-09-28): on a tree
+// that size you cannot even see how big the job is before starting it, which
+// is the difference between a decision and a treadmill.
+func TestDeversionReportsEveryCollision(t *testing.T) {
+	root := newRepo(t)
+	for _, n := range []string{"a", "b", "c"} {
+		// The ambiguous shape: a package that exists both unversioned and
+		// under a /vN, so lifting the versioned one has nowhere to land.
+		addPkg(t, root, "p/"+n+"/v0", "gno.land/p/"+n+"/v0", "package "+n+"\n")
+		addPkg(t, root, "p/"+n, "gno.land/p/"+n, "package "+n+"\n")
+	}
+	commit(t, root, "initial")
+	mustRun(t, root, "sync")
+
+	var out, errb bytes.Buffer
+	err := Run([]string{"deversion", "-C", root, "-n"}, &out, &errb)
+	if err == nil {
+		t.Fatal("deversion accepted three ambiguous directories")
+	}
+	for _, n := range []string{"p/a", "p/b", "p/c"} {
+		if !strings.Contains(err.Error(), n) {
+			t.Errorf("%s is not in the report:\n%v", n, err)
+		}
+	}
+	if !strings.Contains(err.Error(), "3 directories") {
+		t.Errorf("the count is missing, so the size of the job is not visible:\n%v", err)
+	}
+	// Nothing moved: a refusal that had already half-migrated would be worse
+	// than one that reports less.
+	if !strings.Contains(err.Error(), "Nothing has been moved") {
+		t.Errorf("the report does not say the tree is untouched:\n%v", err)
+	}
+	for _, n := range []string{"a", "b", "c"} {
+		if _, err := os.Stat(filepath.Join(root, "p", n, "v0", "gnomod.toml")); err != nil {
+			t.Errorf("p/%s/v0 was moved despite the refusal: %v", n, err)
+		}
+	}
+}
