@@ -366,24 +366,58 @@ func packageAtCwd(root, cmd string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	wd, err = filepath.Abs(wd)
-	if err != nil {
-		return "", err
-	}
-	for d := wd; strings.HasPrefix(d, root); d = filepath.Dir(d) {
+	// Both sides resolved before they are compared, and only for the
+	// comparison: the caller's root is what every other message prints, and
+	// turning /tmp/w into /private/tmp/w everywhere would be a worse bug than
+	// this one. See resolveLinks for why they disagree at all.
+	rroot, rwd := resolveLinks(root), resolveLinks(wd)
+	for d := rwd; within(rroot, d); d = filepath.Dir(d) {
 		if _, err := os.Stat(filepath.Join(d, "gnomod.toml")); err == nil {
-			rel, err := filepath.Rel(root, d)
+			rel, err := filepath.Rel(rroot, d)
 			if err != nil {
 				return "", err
 			}
 			return filepath.ToSlash(rel), nil
 		}
-		if d == root {
+		if d == rroot {
 			break
 		}
 	}
 	return "", fmt.Errorf("no package here, and none given. cd into one, or name it: `gnopm %s <package>`\n"+
 		"  `gnopm ls -q` lists them", cmd)
+}
+
+// resolveLinks is filepath.Abs plus EvalSymlinks, falling back to whatever it
+// got as far as.
+//
+// FindRoot returns the spelling it was given, symlinks intact. os.Getwd
+// returns $PWD when that still names the working directory, and the kernel's
+// resolved path otherwise, which is what a process that chdir'd hands its
+// children. The two spellings (/tmp/w and /private/tmp/w) share no prefix at
+// all, so `gnopm bump` inside a package answered "no package here" (#75).
+//
+// EvalSymlinks failing is not fatal: a path that does not exist cannot be a
+// workspace root either, and the caller's own stat is the check that matters.
+func resolveLinks(p string) string {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return p
+	}
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		return real
+	}
+	return abs
+}
+
+// within reports whether d is root or sits inside it, as PATHS and not as
+// strings: strings.HasPrefix, which this replaced, puts /a/workspace-old
+// inside /a/workspace.
+func within(root, d string) bool {
+	rel, err := filepath.Rel(root, d)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func cmdUnbump(e *Env, fs *flag.FlagSet, args []string) error {

@@ -150,3 +150,77 @@ func TestBumpFindsThePackageYouAreStandingIn(t *testing.T) {
 		t.Fatal("the workspace root is not a package; it must say so")
 	}
 }
+
+// TestPackageAtCwdFollowsASymlinkedWorkspace pins moul/gnopm#75: `gnopm bump`
+// and `gnopm unbump` with no argument answered "no package here" from inside a
+// package, whenever the workspace path went through a symlink.
+//
+// Two things have to line up. FindRoot returns the spelling it was given, with
+// symlinks intact. os.Getwd returns $PWD when $PWD still names the working
+// directory, and the kernel's resolved path otherwise. The old condition
+// compared the two with strings.HasPrefix, and /tmp/w and /private/tmp/w share
+// no prefix at all.
+//
+// So an interactive shell hid it, because a shell keeps $PWD in the symlinked
+// spelling and the two then agree. A process that chdir'd hands its children
+// no usable $PWD, and that is where it bit: verified at the CLI with
+// `env -u PWD gnopm -C /tmp/w unbump` from inside a package, which failed
+// before this change and works after.
+//
+// os.Chdir in a test is exactly that shape, which is why
+// TestBumpFindsThePackageYouAreStandingIn failed on every macOS checkout and
+// passed in CI, where /tmp on a Linux runner is a real directory and the two
+// spellings coincide. The symlink here is made explicitly rather than
+// inherited from the platform, so this fails on the old code on Linux too.
+func TestPackageAtCwdFollowsASymlinkedWorkspace(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "p/moul/md", "gno.land/p/moul/md/v0", "package md\n")
+
+	link := filepath.Join(t.TempDir(), "via-a-link")
+	if err := os.Symlink(root, link); err != nil {
+		t.Skipf("no symlinks here: %v", err)
+	}
+
+	wd, _ := os.Getwd()
+	defer os.Chdir(wd)
+	if err := os.Chdir(filepath.Join(link, "p/moul/md")); err != nil {
+		t.Fatal(err)
+	}
+	// The root as the caller spells it, which is the unresolved one.
+	got, err := packageAtCwd(link, "bump")
+	if err != nil {
+		t.Fatalf("inside the package through a symlink: %v", err)
+	}
+	if got != "p/moul/md" {
+		t.Fatalf("found %q, want p/moul/md", got)
+	}
+}
+
+// TestWithinComparesPathsNotStrings: the old condition was
+// strings.HasPrefix(d, root), which puts /a/workspace-old inside /a/workspace
+// and would walk a sibling tree looking for a package.
+//
+// Unreachable from packageAtCwd's own tests, because reaching it needs a
+// working directory outside the root with a name that starts like it, which is
+// a shape no fixture builds by accident.
+func TestWithinComparesPathsNotStrings(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "workspace")
+	for _, tc := range []struct {
+		name string
+		d    string
+		want bool
+	}{
+		{"the root itself", root, true},
+		{"a package in it", filepath.Join(root, "p/moul/md"), true},
+		{"its parent", base, false},
+		{"a sibling that starts the same", root + "-old", false},
+		{"a sibling entirely", filepath.Join(base, "elsewhere"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := within(root, tc.d); got != tc.want {
+				t.Errorf("within(%q, %q) = %v, want %v", root, tc.d, got, tc.want)
+			}
+		})
+	}
+}
