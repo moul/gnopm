@@ -9,13 +9,13 @@
 <text x="18" y="56" fill="#7ee787">$</text>
 <text x="34.8" y="56" fill="#d2a8ff">gnopm ls</text>
 <text x="18" y="76" fill="#c9d1d9" xml:space="preserve">MODULE                          SOURCE   LOCATION</text>
-<text x="18" y="96" fill="#c9d1d9" xml:space="preserve">gno.land/p/demo/math/bignum/v0  history  18bd6bebed5e:p/demo/math/bignum</text>
+<text x="18" y="96" fill="#c9d1d9" xml:space="preserve">gno.land/p/demo/math/bignum/v0  history  aa85e65e1aaf:p/demo/math/bignum</text>
 <text x="18" y="116" fill="#c9d1d9" xml:space="preserve">gno.land/p/demo/math/bignum/v3  tree     p/demo/math/bignum</text>
 <text x="18" y="136" fill="#c9d1d9" xml:space="preserve">gno.land/p/demo/orphan/v0       tree     p/demo/orphan</text>
 <text x="18" y="156" fill="#c9d1d9" xml:space="preserve">gno.land/p/demo/set/v0          tree     p/demo/set</text>
-<text x="18" y="176" fill="#c9d1d9" xml:space="preserve">gno.land/p/demo/strs/v0         history  df9831e0f614:p/demo/strs/v0</text>
+<text x="18" y="176" fill="#c9d1d9" xml:space="preserve">gno.land/p/demo/strs/v0         history  9da7b4744cf4:p/demo/strs/v0</text>
 <text x="18" y="196" fill="#c9d1d9" xml:space="preserve">gno.land/p/demo/strs/v1         tree     p/demo/strs</text>
-<text x="18" y="216" fill="#c9d1d9" xml:space="preserve">gno.land/p/demo/table/v0        history  4cf5f5ac334c:p/demo/table</text>
+<text x="18" y="216" fill="#c9d1d9" xml:space="preserve">gno.land/p/demo/table/v0        history  0f00218a4e74:p/demo/table</text>
 <text x="18" y="236" fill="#c9d1d9" xml:space="preserve">gno.land/p/demo/table/v1        tree     p/demo/table</text>
 <text x="18" y="256" fill="#c9d1d9" xml:space="preserve">gno.land/r/demo/board/v0        tree     r/demo/board</text>
 </svg>

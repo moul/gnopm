@@ -150,9 +150,14 @@ done
 
 #    The report only. publish also writes the gnokey commands, and a picture
 #    that includes twenty lines of shell says less than one that fits.
+#
+#    CLICOLOR_FORCE because the capture is a pipe and publish is the one
+#    command that colours its report. Without it the image would show the
+#    plain form, which is not what anybody running this sees; termsvg.py reads
+#    the escapes rather than repainting by guesswork.
 {
   echo '$ gnopm publish -o tx.json -addr g1jg8...sqf5'
-  GNOPM_CACHE=off gnopm publish -o tx.json \
+  CLICOLOR_FORCE=1 GNOPM_CACHE=off gnopm publish -o tx.json \
     -addr g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5 \
     -rpc "http://127.0.0.1:$chain_port" -chainid test 2>&1 |
     sed '/^#!\/bin\/sh/,$d'

@@ -30,7 +30,12 @@ import (
 // one line. Execution flattens it, so the two forms can never diverge: there is
 // one list of arguments and two renderings of it.
 type publishCmd struct {
-	note   string     // the "# ..." line above it, already worded, no marker
+	note string // the "# ..." line above the printed script, already worded
+	// short is the same thing in the width a progress line has: the printed
+	// script has a whole line for a comment, a run line does not. Falls back
+	// to note when empty, so a command that has nothing shorter to say says
+	// the long thing rather than nothing.
+	short  string
 	name   string     // the client binary, "gnokey" unless -gnokey-cmd said otherwise
 	groups [][]string // one display line each
 }
@@ -114,12 +119,18 @@ var startClient = func(name string, args []string, out, errw *os.File) error {
 func (e *Env) runPublish(cmds []publishCmd) error {
 	out, errw := stdFile(e.Out, os.Stdout), stdFile(e.Errw, os.Stderr)
 	for i, c := range cmds {
-		if c.note != "" {
-			e.logf("\nrun      [%d/%d] %s\n", i+1, len(cmds), c.note)
-		} else {
-			e.logf("\nrun      [%d/%d] %s\n", i+1, len(cmds), c.name)
+		what := c.short
+		if what == "" {
+			what = c.note
 		}
-		e.logf("         %s %s\n", c.name, strings.Join(quoteAll(c.flat()), " "))
+		if what == "" {
+			what = c.name
+		}
+		e.logf("%s%s %s\n", e.label("run"), e.dim(fmt.Sprintf("[%d/%d]", i+1, len(cmds))), what)
+		// The exact argv is what -print is for, and what -v is for when the
+		// run is already under way. Echoing it by default put a 200-column
+		// line above every prompt, which is the line people stopped reading.
+		e.tracef("%s%s\n", e.label(""), e.dim(c.name+" "+strings.Join(quoteAll(c.flat()), " ")))
 		if err := startClient(c.name, c.flat(), out, errw); err != nil {
 			// Say how far it got. After a partial run the chain and the plan
 			// disagree, and the next thing to do is re-read the chain rather
@@ -129,7 +140,7 @@ func (e *Env) runPublish(cmds []publishCmd) error {
 				c.name, i+1, len(cmds), c.note, err)
 		}
 	}
-	e.logf("\nran      %d command(s), all reported success\n", len(cmds))
+	e.logf("%s%s\n", e.label("ok"), e.ok(fmt.Sprintf("%d command(s), all reported success", len(cmds))))
 	return nil
 }
 
