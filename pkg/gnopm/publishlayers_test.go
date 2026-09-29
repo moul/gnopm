@@ -199,8 +199,11 @@ func TestPublishBatchesByLayerByDefault(t *testing.T) {
 			t.Fatalf("pair %d is %q then %q", i/2, ran[i].args[0], ran[i+1].args[0])
 		}
 	}
-	if !strings.Contains(report, "2 dependency layer(s)") {
-		t.Errorf("the report does not say how many layers:\n%s", report)
+	// The layer count itself is a -v detail now; what the default report has
+	// to say is the thing this test is named for, which is how many
+	// signatures five packages cost.
+	if !strings.Contains(report, "2 transaction(s) for 5 package(s)") {
+		t.Errorf("the report does not say two transactions for five packages:\n%s", report)
 	}
 }
 
@@ -256,14 +259,16 @@ func TestPublishReportIsQuietAboutLivePackages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("publish -print: %v\n%s", err, report)
 	}
-	if strings.Contains(report, "gno.land/p/moul/alpha/v0") {
+	// The listing trims the domain every row shares and prints it once, so
+	// the path to look for is the trimmed one.
+	if strings.Contains(report, "p/moul/alpha/v0") {
 		t.Errorf("a live package is listed by default:\n%s", report)
 	}
-	if !strings.Contains(report, "2 package(s) already on chain") {
+	if !strings.Contains(report, "2 live, nothing to do") {
 		t.Errorf("the report does not account for the live ones:\n%s", report)
 	}
 	// What is going up is still named, because that is the decision.
-	if !strings.Contains(report, "gno.land/p/moul/gamma/v0") {
+	if !strings.Contains(report, "p/moul/gamma/v0") {
 		t.Errorf("an absent package is not listed:\n%s", report)
 	}
 
@@ -271,7 +276,7 @@ func TestPublishReportIsQuietAboutLivePackages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("publish -v: %v\n%s", err, verbose)
 	}
-	if !strings.Contains(verbose, "gno.land/p/moul/alpha/v0") {
+	if !strings.Contains(verbose, "p/moul/alpha/v0") {
 		t.Errorf("-v does not list the live packages:\n%s", verbose)
 	}
 }

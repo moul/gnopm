@@ -9,17 +9,26 @@ script being the integration test.
 
 SVG rather than PNG: it stays crisp at any zoom, it diffs as text, and it
 needs no image toolchain. Input is plain text with a leading "$ " marking a
-command line; ANSI escapes are stripped.
+command line.
+
+A line that carries SGR escapes is rendered with the colours the tool actually
+chose; a line that carries none falls back to the heuristic below. That split
+matters: `gnopm publish` colours its own report, and an image that repainted it
+by guesswork would be a picture of something the user never sees.
 """
 import html
 import re
 import sys
 
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+SGR = re.compile(r"\x1b\[([0-9;]*)m")
 
 BG, FG = "#11131a", "#c9d1d9"
 PROMPT, CMD, DIM = "#7ee787", "#d2a8ff", "#8b949e"
 WARN, OK = "#f0883e", "#7ee787"
+# The four the report uses, in this terminal's palette rather than the raw
+# ANSI ones, so the image matches the rest of the site.
+SGR_FILL = {"31": "#ff7b72", "32": "#7ee787", "33": "#e3b341", "36": "#79c0ff"}
 CH_W, LINE_H, PAD = 8.4, 20, 18
 TITLE_H = 34
 
@@ -37,8 +46,30 @@ def colour(line: str) -> str:
     return FG
 
 
+def runs(line: str):
+    """Split a line into (text, fill, bold) runs, following its SGR codes."""
+    out, pos, fill, bold = [], 0, None, False
+    for m in SGR.finditer(line):
+        if m.start() > pos:
+            out.append((line[pos : m.start()], fill, bold))
+        for code in (m.group(1) or "0").split(";"):
+            if code in ("", "0"):
+                fill, bold = None, False
+            elif code == "1":
+                bold = True
+            elif code == "2":
+                fill = DIM
+            elif code in SGR_FILL:
+                fill = SGR_FILL[code]
+        pos = m.end()
+    if pos < len(line):
+        out.append((line[pos:], fill, bold))
+    return out
+
+
 def render(text: str, title: str) -> str:
-    lines = [ANSI.sub("", l).rstrip() for l in text.rstrip("\n").split("\n")]
+    raw = [l.rstrip() for l in text.rstrip("\n").split("\n")]
+    lines = [ANSI.sub("", l) for l in raw]
     width = max([len(l) for l in lines] + [len(title) + 8, 40])
     w = int(width * CH_W + PAD * 2)
     h = int(len(lines) * LINE_H + PAD * 2 + TITLE_H)
@@ -57,7 +88,21 @@ def render(text: str, title: str) -> str:
         f"{html.escape(title)}</text>"
     )
     y = TITLE_H + PAD + 4
-    for line in lines:
+    for line, src in zip(lines, raw):
+        if SGR.search(src) and not line.startswith("$ "):
+            spans = []
+            for chunk, fill, bold in runs(src):
+                attrs = f' fill="{fill}"' if fill else ""
+                if bold:
+                    attrs += ' font-weight="600"'
+                spans.append(f"<tspan{attrs}>{html.escape(chunk)}</tspan>")
+            out.append(
+                f'<text x="{PAD}" y="{y}" fill="{FG}" xml:space="preserve">'
+                + "".join(spans)
+                + "</text>"
+            )
+            y += LINE_H
+            continue
         if line.startswith("$ "):
             out.append(f'<text x="{PAD}" y="{y}" fill="{PROMPT}">$</text>')
             out.append(

@@ -159,7 +159,7 @@ func TestPublishTxDocument(t *testing.T) {
 	}
 	// Numbers without this caveat would be worse than no numbers: they are
 	// part of the signature.
-	if !strings.Contains(stderr.String(), "stops being valid") {
+	if !strings.Contains(stderr.String(), "the signature covers the sequence") {
 		t.Fatalf("the report does not warn about the sequence:\n%s", stderr.String())
 	}
 }

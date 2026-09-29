@@ -281,6 +281,48 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 		}
 	}
 
+	// Every message carries the creator as a field, so nothing can be batched
+	// without knowing which address will sign. Resolved here rather than at
+	// the point of use so the header can name it on the same line as the key:
+	// the key is what you type, the address is what signs, and reading one
+	// without the other is how the wrong account ends up owning a namespace.
+	creator, creatorErr := creatorFor(gnokeyCmdOf(fs), key, flagString(fs, "addr"))
+
+	// The report goes to stderr, so that under -print stdout carries only the
+	// script and under a real run it carries only the client's own output.
+	// Nothing here is either.
+	e.logf("%s%s  %s\n", e.label("chain"), e.bold(chain.ID), e.dim(chain.RPC))
+	if chain.Host != "" {
+		e.tracef("%s%s\n", e.label(""), e.dim("discovered from "+chain.Host))
+	}
+	if creator != "" {
+		e.logf("%s%s  %s\n", e.label("key"), key, e.dim(creator))
+	} else {
+		e.logf("%s%s\n", e.label("key"), key)
+	}
+	if gnokeyCmd != "gnokey" {
+		e.logf("%s%s\n", e.label("client"), gnokeyCmd)
+	}
+	if !haveInert {
+		e.tracef("%s%s\n", e.label("note"),
+			e.dim("vm/qinertpaths unavailable: this chain cannot park a submission, so absent really is absent"))
+	}
+	// The cache line earns its place only when there is a cache and it did
+	// something. Reporting it under -no-cache would contradict the flag, and
+	// an always-on "0 answered from the cache" is the kind of line people stop
+	// reading. A first run says "0 answered, 188 learned", which is worth
+	// saying: it is the run that makes the next one fast.
+	if file := probe.Cache().where(); file != "" {
+		if _, hits, learned := probe.Cache().stats(); hits > 0 || learned > 0 {
+			e.logf("%s%s\n", e.label("cache"),
+				e.dim(fmt.Sprintf("%d answered, %d learned, in %s", hits, learned, tildePath(file))))
+		}
+	}
+	if n := len(pulled); n > 0 {
+		e.logf("%s%s\n", e.label("deps"),
+			e.dim(fmt.Sprintf("%d package(s) added: imported by what you named", n)))
+	}
+
 	// Every package already on chain, which is the only set whose declared
 	// `private` can be compared against anything. See privatecheck.go for why
 	// a flag that is merely wrong, on a package publish will not touch, is
@@ -296,32 +338,33 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 		return err
 	}
 
-	// The report goes to stderr, so that under -print stdout carries only the
-	// script and under a real run it carries only the client's own output.
-	// Nothing here is either.
-	e.logf("chain    %s (%s)\n", chain.ID, chain.RPC)
-	if chain.Host != "" {
-		e.logf("         discovered from %s\n", chain.Host)
+	out := flagString(fs, "o")
+	if out != "" && creatorErr != nil {
+		// -o was asked for explicitly, so not knowing the address is an
+		// error rather than a reason to quietly do something else.
+		return fmt.Errorf("cannot tell which address will sign, and it is a field of every message: %w.\n"+
+			"  Name it with -addr g1...", creatorErr)
 	}
-	e.logf("key      %s\n", key)
-	if gnokeyCmd != "gnokey" {
-		e.logf("client   %s\n", gnokeyCmd)
+	// One signature per dependency LAYER is the default, because the
+	// alternative is one per package and a workspace has hundreds. Packages
+	// in a layer do not import each other, so batching them changes nothing
+	// the chain can observe except how many times you type a passphrase.
+	// -one-tx-per-package is the way back to a transaction each.
+	if out == "" && !flagBool(fs, "one-tx-per-package") && creatorErr == nil {
+		out = defaultTxPath(e)
 	}
-	if n := len(pulled); n > 0 {
-		e.logf("deps     %d package(s) added: imported by what you named\n", n)
-	}
-	if !haveInert {
-		e.logf("note     vm/qinertpaths unavailable: this chain cannot park a\n" +
-			"         submission, so 'absent' really is absent\n")
-	}
-	// The cache line earns its place only when there is a cache and it did
-	// something. Reporting it under -no-cache would contradict the flag, and
-	// an always-on "0 answered from the cache" is the kind of line people stop
-	// reading. A first run says "0 answered, 188 learned", which is worth
-	// saying: it is the run that makes the next one fast.
-	if file := probe.Cache().where(); file != "" {
-		if _, hits, learned := probe.Cache().stats(); hits > 0 || learned > 0 {
-			e.logf("cache    %d answered from %s, %d learned\n", hits, file, learned)
+
+	// The documents are built BEFORE the listing is printed, so that every
+	// package row can say which transaction it lands in. That replaces a
+	// per-transaction membership block that repeated every path a second time,
+	// which on this workspace was twenty lines saying what eight already said.
+	// Skipped when something is going to stop the run anyway: writing
+	// documents for a plan that cannot be signed is work nobody reads.
+	var hd *handoff
+	if out != "" && blockedCount(plans) == 0 && len(mismatched) == 0 && todoCount(plans) > 0 {
+		hd, err = buildHandoff(e, plans, deps, creator, out)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -330,62 +373,11 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	// report only what the run will act on or what stops it; -v is the full
 	// listing, and it is what to reach for when the question is "why is that
 	// package in the plan at all".
-	todo, blocked, live := 0, 0, 0
-	for _, pl := range plans {
-		acts := pl.state == StateAbsent || pl.state == StateParked || len(pl.missing) > 0 ||
-			pl.republish || pl.skipped != ""
-		if e.Verbose || acts {
-			marker := ""
-			if pl.dep {
-				marker = "  (dependency)"
-			}
-			state := string(pl.state)
-			if pl.republish {
-				state = "REPUBLISH"
-			}
-			e.logf("\n%-8s %s%s\n", state, pl.pkg.Module, marker)
-			e.logf("         %d bytes in %d file(s)", pl.bytes, len(pl.files))
-			if len(pl.files) > 0 {
-				e.logf(", largest %s at %d", pl.files[0].Name, pl.files[0].Size)
-			}
-			e.logf("\n")
-			if pl.republish {
-				e.logf("         replaces the copy on chain; %d file(s) differ: %s\n",
-					len(pl.changed), strings.Join(pl.changed, ", "))
-				e.logf("         a redeploy re-runs init() and RESETS realm state\n")
-			}
-			if pl.skipped != "" {
-				if len(pl.changed) > 0 {
-					e.logf("         %d file(s) differ: %s\n",
-						len(pl.changed), strings.Join(pl.changed, ", "))
-				}
-				e.logf("         NOT republished: %s\n", pl.skipped)
-			}
-		}
-		for _, m := range pl.missing {
-			e.logf("         BLOCKED by %s: %s\n", m.module, m.why)
-		}
-		switch {
-		case len(pl.missing) > 0:
-			blocked++
-		case pl.state == StateAbsent, pl.republish:
-			todo++
-		case pl.state == StateParked:
-			e.logf("         waiting on an approver; do not send it again\n")
-		case pl.skipped != "":
-			// Already reported above, in full. Counting it as "nothing to do"
-			// would hide the one line the user ran -republish to read.
-		default:
-			live++
-		}
-	}
-	if live > 0 && !e.Verbose {
-		e.logf("live     %d package(s) already on chain, nothing to do (-v lists them)\n", live)
-	}
+	todo, blocked, _ := reportPlans(e, plans, domain, hd.txOf(), hd.count())
 
 	for _, m := range mismatched {
-		e.logf("\nPRIVATE  %s\n", m.module)
-		e.logf("         %s\n", m.why())
+		e.logf("\n%s%s\n", e.label("PRIVATE"), e.bad(trimDomain(m.module, domain)))
+		e.logf("%s%s\n", e.label(""), e.bad(m.why()))
 	}
 
 	if blocked > 0 {
@@ -403,50 +395,21 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	}
 	if todo == 0 {
 		if republish {
-			e.logf("\nnothing to publish or republish\n")
+			e.logf("\n%s%s\n", e.label("ok"), e.ok("nothing to publish or republish"))
 		} else {
-			e.logf("\nnothing to publish\n")
+			e.logf("\n%s%s\n", e.label("ok"), e.ok("nothing to publish"))
 		}
 		return nil
 	}
 
-	e.logf("\n%d package(s) to publish, in dependency order\n", todo)
-	if republish {
-		e.logf("         a REPUBLISH line above replaces a live package and resets its realm state\n")
+	if hd != nil {
+		return emitHandoff(e, fs, hd, probe, key, creator, haveInert)
 	}
-
-	// The handoff is an output, not a hard-coded assumption about where the
-	// key is. -o writes one document for one signature instead of N commands
-	// for N signatures, which is strictly better whenever more than one
-	// package is going up: it is atomic, so there is no half-deployed state
-	// that neither the tree nor the chain describes.
-	// Every message carries the creator as a field, so batching cannot start
-	// without knowing which address will sign.
-	creator, creatorErr := creatorFor(gnokeyCmdOf(fs), key, flagString(fs, "addr"))
-
-	if out := flagString(fs, "o"); out != "" {
-		// -o was asked for explicitly, so not knowing the address is an
-		// error rather than a reason to quietly do something else.
-		if creatorErr != nil {
-			return fmt.Errorf("cannot tell which address will sign, and it is a field of every message: %w.\n"+
-				"  Name it with -addr g1...", creatorErr)
-		}
-		return writeTxHandoff(e, fs, plans, deps, probe, key, creator, out)
-	}
-
-	// One signature per dependency LAYER is the default, because the
-	// alternative is one per package and a workspace has hundreds. Packages
-	// in a layer do not import each other, so batching them changes nothing
-	// the chain can observe except how many times you type a passphrase.
-	// -one-tx-per-package is the way back to a transaction each.
-	if !flagBool(fs, "one-tx-per-package") {
-		if creatorErr == nil {
-			return writeTxHandoff(e, fs, plans, deps, probe, key, creator, defaultTxPath(e))
-		}
+	if out == "" && !flagBool(fs, "one-tx-per-package") {
 		// Falling back rather than failing: a publish that works with more
 		// prompts beats one that refuses over a name lookup. Say why, once.
-		e.logf("note     one transaction per package: %v\n", creatorErr)
-		e.logf("         -addr g1... batches them by dependency layer instead, far fewer prompts\n")
+		e.logf("%s%s\n", e.label("note"), e.warn("one transaction per package: "+creatorErr.Error()))
+		e.logf("%s%s\n", e.label(""), e.dim("-addr g1... batches them by dependency layer instead, far fewer prompts"))
 	}
 
 	var cmds []publishCmd
@@ -461,7 +424,8 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 			note: fmt.Sprintf("%s: %d bytes, %d gas (%d fixed + %d/byte), fee %s at %s ugnot/gas",
 				pl.pkg.Module, pl.bytes, gas, gasFixed, gasPerByte, FeeFor(gas),
 				strconv.FormatFloat(float64(feeRatioMicro)/1e6, 'g', -1, 64)),
-			name: gnokeyCmd,
+			short: "addpkg " + trimDomain(pl.pkg.Module, domain),
+			name:  gnokeyCmd,
 			groups: [][]string{
 				{"maketx", "addpkg"},
 				{"-pkgdir", e.Root + "/" + pl.pkg.Dir},
@@ -477,6 +441,8 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 		})
 	}
 
+	e.logf("\n%s%s\n", e.label("plan"), e.bold(fmt.Sprintf("%d package(s), one transaction each, %d ugnot in fees", len(cmds), totalFee)))
+
 	if flagBool(fs, "print") {
 		e.printPublish(cmds, "generated by gnopm publish")
 		if haveInert {
@@ -486,14 +452,12 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 		return nil
 	}
 
-	e.logf("\nbroadcast %d package(s), %d ugnot in fees, one %s prompt each.\n", len(cmds), totalFee, gnokeyCmd)
-	e.logf("          -print writes the commands out instead of running them.\n")
+	e.logf("%s%s\n", e.label("sign"), fmt.Sprintf("%d %s prompt(s); %s", len(cmds), gnokeyCmd, e.dim("-print writes the commands out instead")))
 	if err := e.runPublish(cmds); err != nil {
 		return err
 	}
 	if haveInert {
-		e.logf("\nnote     this chain parks submissions: a green broadcast is NOT live.\n")
-		e.logf("         Re-run `gnopm publish` to see whether an approver enabled them.\n")
+		e.logf("%s%s\n", e.label("note"), e.warn("this chain parks submissions: a green broadcast is NOT live. Re-run gnopm publish to see whether an approver enabled them."))
 	}
 	return nil
 }
@@ -515,79 +479,139 @@ func namespaceOf(module string) string {
 	return parts[2]
 }
 
-// writeTxHandoff emits the whole deploy as one unsigned transaction document,
-// or as a numbered set when it does not fit in one.
+// handoff is the whole deploy as unsigned transaction documents: built, and
+// written, before the report is printed so that every package row can name the
+// transaction it lands in.
 //
 // gnopm still never signs. What changes is the shape of the handoff: a document
 // the signer reads, signs once and broadcasts once, which also happens to be
 // the shape a multisig ceremony needs, so a DAO-owned namespace gets the same
 // path for free.
-func writeTxHandoff(e *Env, fs *flag.FlagSet, plans []plan, deps map[string][]string, probe *Probe, key, creator, out string) error {
-	chain := probe.Chain()
+type handoff struct {
+	docs     []*TxDocument
+	paths    []string
+	tx       map[string]int // module -> 1-based transaction it lands in
+	layers   int
+	msgCount int
+}
 
-	// creator is an address, not a key name: it is a field of the message, so
-	// gnopm has to know it before it can write anything. Resolving a keybase
-	// name would mean reading gnokey's keybase, and gnopm is not a wallet.
+// txOf and count are nil-safe, because the listing is printed whether or not a
+// handoff was built (a blocked run builds none) and a caller should not have to
+// branch to say so.
+func (h *handoff) txOf() map[string]int {
+	if h == nil {
+		return nil
+	}
+	return h.tx
+}
 
-	// One transaction per dependency LAYER, not one per workspace. Packages
-	// in a layer are independent of each other, so the order they execute in
-	// cannot matter and they can share a signature; a dependent waits for the
-	// layer after its dependency, which is the only ordering the chain cares
-	// about. See publishlayers.go for why the whole graph is not batched into
-	// one transaction instead.
+func (h *handoff) count() int {
+	if h == nil {
+		return 0
+	}
+	return len(h.docs)
+}
+
+// todoCount and blockedCount answer the two questions that decide whether
+// building a handoff is worth doing at all, without printing anything. The
+// listing counts the same things as it renders; these run before it.
+func todoCount(plans []plan) int {
+	n := 0
+	for _, pl := range plans {
+		if publishes(pl) {
+			n++
+		}
+	}
+	return n
+}
+
+func blockedCount(plans []plan) int {
+	n := 0
+	for _, pl := range plans {
+		if len(pl.missing) > 0 {
+			n++
+		}
+	}
+	return n
+}
+
+// buildHandoff groups the plan into dependency layers, turns each into one or
+// more transaction documents, and writes them.
+//
+// One transaction per dependency LAYER, not one per workspace. Packages in a
+// layer are independent of each other, so the order they execute in cannot
+// matter and they can share a signature; a dependent waits for the layer after
+// its dependency, which is the only ordering the chain cares about. See
+// publishlayers.go for why the whole graph is not batched into one transaction
+// instead.
+func buildHandoff(e *Env, plans []plan, deps map[string][]string, creator, out string) (*handoff, error) {
 	layers, err := layerPlans(plans, deps)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	gasOf := map[string]int64{}
-	var docs []*TxDocument
-	msgCount := 0
+	h := &handoff{tx: map[string]int{}, layers: len(layers)}
 	for _, layer := range layers {
 		var msgs []AddPackageMsg
 		for _, pl := range layer {
 			msg, err := AddPackageFor(e.Root+"/"+pl.pkg.Dir, pl.pkg.Module, creator, DepositFor(pl.bytes))
 			if err != nil {
-				return err
+				return nil, err
 			}
 			msgs = append(msgs, msg)
 			gasOf[pl.pkg.Module] = GasFor(pl.bytes)
 		}
 		part, err := batchDocuments(msgs, func(m AddPackageMsg) int64 { return gasOf[m.Package.Path] })
 		if err != nil {
-			return err
+			return nil, err
 		}
-		docs = append(docs, part...)
-		msgCount += len(msgs)
+		h.docs = append(h.docs, part...)
+		h.msgCount += len(msgs)
 	}
-	if len(docs) == 0 {
-		e.logf("\nnothing to publish\n")
-		return nil
+	if len(h.docs) == 0 {
+		return nil, nil
+	}
+	for i, d := range h.docs {
+		for _, m := range d.Msgs {
+			h.tx[m.Package.Path] = i + 1
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
-		return err
+		return nil, err
 	}
-	paths, err := writeDocuments(out, docs)
+	h.paths, err = writeDocuments(out, h.docs)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	return h, nil
+}
 
-	e.logf("\nlayers   %d dependency layer(s) -> %d transaction(s) for %d package(s)\n",
-		len(layers), len(docs), msgCount)
-	e.logf("         a layer is packages that do not import each other, so one signature covers it\n")
+// emitHandoff prints the transaction block and then signs and broadcasts, or
+// prints the commands that would.
+func emitHandoff(e *Env, fs *flag.FlagSet, h *handoff, probe *Probe, key, creator string, haveInert bool) error {
+	chain := probe.Chain()
 
 	// Account number and sequence are covered by the signature, so they belong
 	// in the command rather than in the document. Read them when the chain
 	// will say, and be explicit about what that makes true.
 	acct, acctErr := ReadAccount(chain, creator)
 
-	e.logf("\ncreator  %s\n", creator)
-	if len(docs) > 1 {
-		e.logf("         they stay in dependency order, so sign and broadcast them in order\n")
+	seq := ""
+	if acctErr == nil {
+		if len(h.docs) > 1 {
+			seq = fmt.Sprintf(", sequence %d-%d", acct.Sequence, acct.Sequence+uint64(len(h.docs))-1)
+		} else {
+			seq = fmt.Sprintf(", sequence %d", acct.Sequence)
+		}
 	}
-	for i, p := range paths {
-		e.logf("\nwrote    %s (%d message(s))\n", p, len(docs[i].Msgs))
-		for _, m := range docs[i].Msgs {
-			e.logf("           %s\n", m.Package.Path)
+	e.logf("\n%s%s\n", e.label("plan"),
+		e.bold(fmt.Sprintf("%d transaction(s) for %d package(s)%s", len(h.docs), h.msgCount, seq)))
+	e.tracef("%s%s\n", e.label(""),
+		e.dim(fmt.Sprintf("%d dependency layer(s); a layer is packages that do not import each other, so one signature covers it", h.layers)))
+	for i, p := range h.paths {
+		e.logf("%s%s  %s\n", e.label(""), tildePath(p), e.dim(fmt.Sprintf("%d msg", len(h.docs[i].Msgs))))
+		for _, m := range h.docs[i].Msgs {
+			e.tracef("%s%s\n", e.label(""), e.dim("  "+m.Package.Path))
 		}
 	}
 
@@ -597,7 +621,7 @@ func writeTxHandoff(e *Env, fs *flag.FlagSet, plans []plan, deps map[string][]st
 	// unreadable account forces the print form regardless of the flag.
 	if acctErr != nil {
 		e.printf("#!/bin/sh\n# generated by gnopm publish -o; fill in the two numbers, then run.\nset -e\n")
-		for _, p := range paths {
+		for _, p := range h.paths {
 			e.printf("\n%s sign \\\n", gnokeyCmdOf(fs))
 			e.printf("  -tx-path %s \\\n", shellQuote(p))
 			e.printf("  -chainid %s \\\n", chain.ID)
@@ -606,21 +630,24 @@ func writeTxHandoff(e *Env, fs *flag.FlagSet, plans []plan, deps map[string][]st
 			e.printf("  %s\n", key)
 			e.printf("%s broadcast -remote %s %s\n", gnokeyCmdOf(fs), chain.RPC, shellQuote(p))
 		}
-		e.logf("\nnote     could not read %s from the chain (%v), so the two numbers the\n", creator, acctErr)
-		e.logf("         signature covers are unknown and this cannot be run for you.\n")
-		e.logf("         gnokey query auth/accounts/%s -remote %s\n", creator, chain.RPC)
+		e.logf("%s%s\n", e.label("note"),
+			e.warn(fmt.Sprintf("could not read %s from the chain (%v): the two numbers the signature covers are unknown, so this cannot be run for you", creator, acctErr)))
+		e.logf("%s%s\n", e.label(""),
+			e.dim(fmt.Sprintf("gnokey query auth/accounts/%s -remote %s", creator, chain.RPC)))
 		return nil
 	}
 
 	var cmds []publishCmd
-	for i, p := range paths {
+	for i, p := range h.paths {
 		num := strconv.FormatUint(acct.Number, 10)
 		seq := strconv.FormatUint(acct.Sequence+uint64(i), 10)
-		what := fmt.Sprintf("%s: %d message(s), sequence %s", p, len(docs[i].Msgs), seq)
+		what := fmt.Sprintf("%s: %d message(s), sequence %s", p, len(h.docs[i].Msgs), seq)
+		base := filepath.Base(p)
 		cmds = append(cmds,
 			publishCmd{
-				note: "sign " + what,
-				name: gnokeyCmdOf(fs),
+				note:  "sign " + what,
+				short: "sign " + base + " " + e.dim("seq "+seq),
+				name:  gnokeyCmdOf(fs),
 				groups: [][]string{
 					{"sign"},
 					{"-tx-path", p},
@@ -632,6 +659,7 @@ func writeTxHandoff(e *Env, fs *flag.FlagSet, plans []plan, deps map[string][]st
 			},
 			publishCmd{
 				note:   "broadcast " + p,
+				short:  "broadcast " + base,
 				name:   gnokeyCmdOf(fs),
 				groups: [][]string{{"broadcast"}, {"-remote", chain.RPC}, {p}},
 			},
@@ -644,21 +672,25 @@ func writeTxHandoff(e *Env, fs *flag.FlagSet, plans []plan, deps map[string][]st
 	// Saying the numbers without saying this would be worse than not saying
 	// them: they are part of the signature, so anything else this account
 	// signs first invalidates the document.
-	e.logf("\nnote     account %d, sequence %d, read just now. The signature covers both,\n", acct.Number, acct.Sequence)
-	e.logf("         so this document stops being valid the moment %s signs anything else.\n", key)
-	if len(docs) > 1 {
-		e.logf("         Each transaction takes the next sequence, which is why order matters.\n")
-	}
+	e.logf("%s%s\n", e.label(""),
+		e.dim(fmt.Sprintf("account %d: the signature covers the sequence, so %s signing anything else first invalidates %s",
+			acct.Number, key, plural(len(h.docs), "this document", "these documents"))))
 	if flagBool(fs, "print") {
 		return nil
 	}
 	// Everything in one document means one prompt, which is the reason -o
 	// exists. Running it here is what makes that reason reachable without a
 	// copy-paste that can go stale between the read and the paste.
-	e.logf("\nsign     %d document(s) for %d package(s), one %s prompt each.\n",
-		len(docs), msgCount, gnokeyCmdOf(fs))
-	e.logf("         -print writes the commands out instead of running them.\n")
-	return e.runPublish(cmds)
+	e.logf("%s%s\n", e.label("sign"),
+		fmt.Sprintf("%d %s prompt(s); %s", len(h.docs), gnokeyCmdOf(fs), e.dim("-print writes the commands out instead")))
+	if err := e.runPublish(cmds); err != nil {
+		return err
+	}
+	if haveInert {
+		e.logf("%s%s\n", e.label("note"),
+			e.warn("this chain parks submissions: a green broadcast is NOT live. Re-run gnopm publish to see whether an approver enabled them."))
+	}
+	return nil
 }
 
 // gnokeyCmdOf is the client to name in an emitted command: a wrapper that adds

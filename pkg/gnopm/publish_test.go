@@ -514,7 +514,9 @@ func TestPublishKeysOffWhatThePatternNamed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, report)
 	}
-	if !strings.Contains(report, "key      moul\n") {
+	// No trailing newline: the key line also carries the address that will
+	// sign, when gnopm could work one out.
+	if !strings.Contains(report, "key      moul") {
 		t.Fatalf("key was guessed from a pulled-in dependency, not from what was named:\n%s", report)
 	}
 }
@@ -641,7 +643,7 @@ func TestPublishRunsTheClientInDependencyOrder(t *testing.T) {
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("published in order %v, want %v: a dependency has to land first", order, want)
 	}
-	if !strings.Contains(report, "broadcast 3 package(s)") {
+	if !strings.Contains(report, "3 package(s), one transaction each") {
 		t.Fatalf("the report must say what is about to be spent before the first prompt:\n%s", report)
 	}
 }

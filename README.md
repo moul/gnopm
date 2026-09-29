@@ -377,6 +377,16 @@ gnopm publish -o tx.json     # one document, one signature, all of it
 do **not** pipe it into `sh`, because a pipe takes stdin away and gnokey cannot
 prompt for the passphrase.
 
+The report is **one line per package**, coloured by what it wants from you:
+green is going up, yellow is waiting on somebody, red is stopping the run, and
+dim is nothing to do. The domain every path shares is printed once at the top
+and trimmed off every row. Everything explanatory, plus the byte counts, the
+dependency layers and the exact `gnokey` argv, is one `-v` away: a workspace of
+two hundred packages printed sixty lines of which eight carried a decision, and
+that is the wrong ratio to read twice a day. Colour follows the usual two
+switches, `NO_COLOR` off and `CLICOLOR_FORCE` on into a pipe, and is never
+written to anything that is not a terminal.
+
 Naming one package plans its in-tree dependencies too, ahead of it: a dependency
 you could publish yourself is not a missing dependency. Only an import that is in
 neither this workspace nor the chain stops the plan. The chain is read in one
@@ -473,9 +483,9 @@ A difference that is **only documentation** is reported, with the files named,
 and not proposed:
 
 ```
-live     gno.land/r/moul/home
-         1 file(s) differ: README.md
-         NOT republished: documentation only, not worth a state wipe …
+gno.land/
+  · r/moul/home  12.4 KiB  not republished: documentation only, not worth a state wipe …
+      1 file(s) differ: README.md
 ```
 
 `addpkg` uploads every `.md` in the package directory, so a README travels on

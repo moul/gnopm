@@ -67,6 +67,9 @@ type Env struct {
 	// and a `gnopm get -rpc http://localhost:26657` whose own sync step then
 	// went and asked gno.land instead would be absurd. Found exactly that way.
 	RPC, ChainID string
+	// Color says whether Errw may carry SGR escapes. See color.go: it is the
+	// terminal-or-not question answered once, so no report line has to.
+	Color bool
 	// CacheDir is where chain answers persist between runs. "" is a cache that
 	// remembers nothing: -no-cache, GNOPM_CACHE=off, or a machine with no home
 	// directory. Left empty by anything that builds an Env directly, so a
@@ -1393,6 +1396,10 @@ func Run(args []string, out, errw io.Writer) error {
 	}
 	e := &Env{Root: root, Out: out, Errw: errw, JSON: flagBool(fs, "json"), Quiet: flagBool(fs, "q"), Verbose: flagBool(fs, "v"), Format: tmpl,
 		RPC: flagString(fs, "rpc"), ChainID: flagString(fs, "chainid")}
+	// Decided once, here, from the stream the report actually goes to. An Env
+	// built by a test or by another program writes to a buffer and gets no
+	// escapes, which is why nothing downstream has to ask again.
+	e.Color = useColor(errw)
 	if !flagBool(fs, "no-cache") {
 		e.CacheDir = cacheDir()
 	}
