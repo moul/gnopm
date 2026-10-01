@@ -624,7 +624,17 @@ squash-merge, so a pin to a branch commit stops resolving once the change lands.
   <img src="docs/img/verify.svg" alt="gnopm verify rejects a pin a squash merge would strand" width="720">
 </p>
 
-CI needs `fetch-depth: 0`, because a shallow clone has none of the pinned commits.
+CI needs `fetch-depth: 0`, because a shallow clone has none of the pinned
+commits. Getting it wrong used to produce a confident wrong answer rather than
+an error: `git merge-base --is-ancestor` says no for a commit the repository
+does not have, which is the same no it says for a commit that is genuinely not
+upstream, so every pin beyond the boundary read as stranded. `verify` and
+`gnopm tool ci` now refuse to answer instead, and name the clone.
+
+Watch for the version of the mistake that looks correct in a diff: a
+`fetch-depth: 0` checkout followed by `git fetch --depth=N` does not deepen a
+complete repository, it grafts a boundary on and discards the rest. That is how
+one workflow reported 39 of 42 pins stranded with three green checks around it.
 
 **A conflicted lock resolves mechanically**, so `gnopm merge-lock` does it.
 Squash-merging a base branch makes every stacked branch conflict here, and taking

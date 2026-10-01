@@ -318,6 +318,13 @@ func VerifyWith(e *Env, upstream string) error {
 	}
 
 	pinned := materializedEntries(lock)
+	// Before the per-pin loop, not inside it: on a shallow clone every pin
+	// older than the boundary fails for the same reason, and three identical
+	// "commit is not in this repository" lines say less than one line naming
+	// the clone (moul/gnopm#72).
+	if missing := beyondTheBoundary(root, pinned); len(missing) > 0 {
+		return errBeyondTheBoundary("whether they still reproduce", missing)
+	}
 	bad := 0
 	var fromHistory []LockEntry
 	for _, e := range pinned {
@@ -371,9 +378,16 @@ func VerifyWith(e *Env, upstream string) error {
 	upstream = upstreamRef(root, upstream)
 	if upstream != "" && !onUpstream(root, upstream) {
 		ref, err := gitResolve(root, upstream)
-		if err != nil {
+		switch {
+		case err != nil:
 			fmt.Fprintf(w, "  skipping the upstream check: %v\n", err)
-		} else {
+		case len(beyondTheBoundary(root, fromHistory)) > 0:
+			// Refused rather than skipped: this is the check somebody adds to
+			// CI precisely so they do not have to remember, and a quiet skip
+			// gives them back the silence they were trying to buy out of.
+			return errBeyondTheBoundary("whether a squash merge would strand them",
+				beyondTheBoundary(root, fromHistory))
+		default:
 			var stranded []string
 			for _, en := range fromHistory {
 				if !gitIsAncestor(root, en.Source.Commit, ref) {

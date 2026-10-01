@@ -175,6 +175,9 @@ func firstLine(s string) string {
 
 // reproduces re-reads every pinned version out of history and re-hashes it.
 func reproduces(root string, pinned []LockEntry) error {
+	if missing := beyondTheBoundary(root, pinned); len(missing) > 0 {
+		return errBeyondTheBoundary("whether they still reproduce", missing)
+	}
 	for _, en := range pinned {
 		if _, err := gitResolve(root, en.Source.Commit); err != nil {
 			return fmt.Errorf("%s: %w", en.Module, err)
@@ -192,6 +195,9 @@ func reproduces(root string, pinned []LockEntry) error {
 
 // stranded reports pins that a squash merge would discard.
 func stranded(root string, pinned []LockEntry, base string) error {
+	if missing := beyondTheBoundary(root, pinned); len(missing) > 0 {
+		return errBeyondTheBoundary("whether a squash merge would strand them", missing)
+	}
 	var bad []string
 	for _, en := range pinned {
 		if !gitIsAncestor(root, en.Source.Commit, base) {

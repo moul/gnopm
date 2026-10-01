@@ -275,7 +275,16 @@ func matchDest(name string, dests map[string]string) (src, rel string, ok bool) 
 }
 
 // gitIsAncestor reports whether commit is reachable from ref.
+//
+// False also when the repository does not have the commit at all, which git
+// does not distinguish. See shallow.go for who has to care and why.
 func gitIsAncestor(root, commit, ref string) bool {
 	_, err := git(root, "merge-base", "--is-ancestor", commit, ref)
 	return err == nil
+}
+
+// gitIsShallow reports whether root's history stops at a grafted boundary.
+func gitIsShallow(root string) bool {
+	out, err := git(root, "rev-parse", "--is-shallow-repository")
+	return err == nil && strings.TrimSpace(out) == "true"
 }
