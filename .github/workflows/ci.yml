@@ -93,3 +93,42 @@ jobs:
           cache: false
       # Prove the documented install path works against this tree.
       - run: go install ./... && gnopm version
+
+  # The action, exercised rather than described. An action nobody runs in CI is
+  # an action that breaks on the day somebody adopts it, and the half most
+  # likely to break is the RUNNER_OS/RUNNER_ARCH to asset-name table, which can
+  # only be wrong per platform. Both runners, both spellings.
+  #
+  # `version` is passed explicitly because `github.action_ref` is empty for a
+  # local `uses: ./`, and passing a real released tag is what makes this test
+  # the download path rather than the fallback.
+  action:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.24"
+          cache: false
+      # A workspace to run against: this repository is gnopm's source, not a
+      # gno workspace, so the demo builds one the way it does everywhere else.
+      - run: ./scripts/demo.sh "${{ runner.temp }}/ws"
+      - uses: ./
+        with:
+          version: v0.13.0
+          working-directory: ${{ runner.temp }}/ws
+          args: tool ci
+      # The fallback has to work too, or an unreleased ref and every Windows
+      # runner fail on the day they are first used. A branch ref has no release
+      # behind it, so this takes the `go install` path by construction.
+      - uses: ./
+        with:
+          version: main
+          working-directory: ${{ runner.temp }}/ws
+          args: status
