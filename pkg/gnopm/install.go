@@ -331,8 +331,8 @@ func VerifyWith(e *Env, upstream string) error {
 			// workspace has been made self-contained, and the assembly
 			// deliberately holds no copy of a vendored package.
 			dest := vendorPathOf(root, e.Module)
-			if _, err := os.Stat(dest); err != nil {
-				dest = filepath.Join(root, assemblyDir, filepath.FromSlash(e.Module))
+			if !dirExists(dest) {
+				dest = assemblyPathOf(root, e.Module)
 			}
 			h, err := hashDownloaded(dest)
 			if err != nil {

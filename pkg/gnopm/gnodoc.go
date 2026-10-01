@@ -71,7 +71,7 @@ func Doc(e *Env, opts DocOptions) error {
 	if !ok {
 		return fmt.Errorf("%s is not in %s", module, lockFile)
 	}
-	dir, err := sourceDirOf(e.Root, entry)
+	dir, where, err := sourceDirOf(e.Root, entry)
 	if err != nil {
 		return err
 	}
@@ -101,28 +101,51 @@ func Doc(e *Env, opts DocOptions) error {
 	// Where the source came from is a diagnostic, not the answer, so it goes
 	// to stderr and the documentation still pipes cleanly.
 	if !entry.Source.InTree() {
-		e.logf("%s has no directory: read from the assembly, pinned at %s\n",
-			module, short(entry.Source.Commit))
+		e.logf("%s has no directory here: read from %s\n", module, where)
 	}
 	renderDoc(e, module, pkg, recs, opts)
 	return nil
 }
 
-// sourceDirOf resolves where a locked module's source actually is: the working
-// tree for a { dir } entry, the assembly for a pinned one.
+// sourceDirOf resolves where a locked module's source actually is, and names
+// the place it found it for the diagnostic line.
 //
-// The assembly is the interesting half and the reason this command exists. A
-// version with no directory is still documented, as long as sync has
-// materialized it, and saying so beats an empty answer.
-func sourceDirOf(root string, e LockEntry) (string, error) {
-	if e.Source.InTree() {
-		return filepath.Join(root, filepath.FromSlash(e.Source.Dir)), nil
+// The half that is not the working tree is the reason this command exists: a
+// version with no directory is still documented, as long as its bytes are
+// somewhere, and saying so beats an empty answer.
+//
+// It branches on the source VARIANT, not on InTree. Branching on InTree put
+// every non-tree entry down the pinned-to-history path, so a { chain } module
+// sitting in vendor/ was reported as unmaterialized with the advice to run
+// `gnopm sync`, which could not have helped: verify found the copy on the same
+// lock in the same workspace, and doc did not (#71). A variant gnopm does not
+// know is now named rather than guessed at, so the next one to arrive says so
+// instead of inheriting the wrong branch.
+func sourceDirOf(root string, e LockEntry) (dir, where string, err error) {
+	switch v := e.Source.Variant(); v {
+	case "dir":
+		return filepath.Join(root, filepath.FromSlash(e.Source.Dir)), "the working tree", nil
+	case "chain":
+		// vendor/ before the assembly, which is install.go's fill order and
+		// the reason this bug existed: the assembly deliberately holds no copy
+		// of a vendored package, so looking there first finds nothing for
+		// exactly the workspaces that have been made self-contained.
+		if d := vendorPathOf(root, e.Module); dirExists(d) {
+			return d, fmt.Sprintf("vendor/, published on %s", e.Source.Chain), nil
+		}
+		if d := assemblyPathOf(root, e.Module); dirExists(d) {
+			return d, fmt.Sprintf("the assembly, published on %s", e.Source.Chain), nil
+		}
+		return "", "", fmt.Errorf("%s came from chain %s and is in neither vendor/ nor the assembly.\n"+
+			"  `gnopm sync` materializes it; `gnopm vendor` commits a copy", e.Module, e.Source.Chain)
+	case "commit":
+		if d := assemblyPathOf(root, e.Module); dirExists(d) {
+			return d, "the assembly, pinned at " + short(e.Source.Commit), nil
+		}
+		return "", "", fmt.Errorf("%s is pinned to history and not materialized.\n  Run `gnopm sync` first", e.Module)
+	default:
+		return "", "", fmt.Errorf("%s has source variant %q, which gnopm cannot read bytes for", e.Module, v)
 	}
-	dir := filepath.Join(root, assemblyDir, filepath.FromSlash(e.Module))
-	if _, err := os.Stat(dir); err != nil {
-		return "", fmt.Errorf("%s is pinned to history and not materialized.\n  Run `gnopm sync` first", e.Module)
-	}
-	return dir, nil
 }
 
 // parsePackageDoc reads a package directory into go/doc.
