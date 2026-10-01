@@ -655,6 +655,41 @@ markers, names what it took from each side, and refuses when one module is pinne
 to two different commits, which is the one ambiguous case and is not what a squash
 merge produces.
 
+## In CI
+
+```yaml
+- uses: actions/checkout@v4
+  with: { fetch-depth: 0 }
+- uses: moul/gnopm@v0.14.0
+```
+
+That installs the prebuilt release binary and runs `gnopm tool ci`, which is the
+four checks plus the lock diff, posted to the job summary. `args` takes anything
+else as one string (`args: verify -deployed`), `working-directory` moves it, and
+`version` overrides what is installed, which otherwise is the tag you called the
+action at. Pin the tag: the action installs the gnopm that matches it, so a green
+run cannot turn red overnight without a change on your side.
+
+Without the action it is the same thing in four lines, and they still work:
+
+```yaml
+- uses: actions/setup-go@v5
+  with: { go-version: "1.24" }
+- run: go install moul.io/gnopm@latest
+- run: gnopm tool ci --comment
+```
+
+The action does not replace those so much as skip the compile: `go install` is
+24 seconds of building a binary every release already publishes prebuilt, and it
+stays as the action's own fallback for Windows runners and for refs with no
+release behind them. **The action contains no checks.** If it ever does,
+something has gone wrong: the checks live in the binary, which is what makes a
+local run and a CI run say the same thing.
+
+`fetch-depth: 0` is the one line you still have to get right, and `gnopm` now
+tells you when you have not, rather than reporting pins it cannot see as
+stranded. See [`gnomod.lock`](#gnomodlock) above.
+
 ## `.gnopm/`
 
 gnopm creates the assembly directory, so gnopm is the one that keeps it out of

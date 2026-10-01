@@ -1,0 +1,105 @@
+# The action, so adopting the checks is one `uses:` rather than a 24-second
+# compile of a binary this repository already publishes prebuilt (#72).
+#
+# It installs gnopm and runs it. It contains no checks, and if it ever does,
+# something has gone wrong: the value of this project is that the checks live
+# in the binary rather than in whatever workflow somebody copied first. This is
+# a second way to deliver that binary, not a second place to keep it.
+#
+# It lives in THIS repository rather than a separate one, and the reason is
+# narrow: the objection to keeping it here was that a floating `v1` tag would
+# make `go install moul.io/gnopm@v1` fail permanently for everyone who tried
+# it, which would mean an odd `action-v1` tag to work around. Exact pins need
+# no such tag. `uses: moul/gnopm@v0.13.0` names a tag that already exists, is
+# already a valid Go version, and is the version this action then installs.
+# Reproducible by construction, and nothing to explain.
+name: gnopm
+description: Run gnopm in CI, from the prebuilt release binary rather than a compile.
+branding:
+  icon: package
+  color: green
+
+inputs:
+  args:
+    description: >-
+      Arguments to pass to gnopm, as one string. Deliberately dumb: the command
+      surface grows, and an action that owned flags would need a release every
+      time one landed.
+    required: false
+    default: tool ci
+  version:
+    description: >-
+      Which gnopm to install. Defaults to the ref this action was called at, so
+      `uses: moul/gnopm@v0.13.0` runs gnopm v0.13.0 and a green run cannot turn
+      red overnight without a change on your side. Pass it explicitly to pin
+      independently, or when calling the action from a local path.
+    required: false
+    default: ${{ github.action_ref }}
+  working-directory:
+    description: The workspace directory to run in.
+    required: false
+    default: .
+
+runs:
+  using: composite
+  steps:
+    - name: Install gnopm
+      shell: bash
+      env:
+        GNOPM_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        if [ -z "${GNOPM_VERSION}" ]; then
+          echo "::error::no version to install. Call this action at a tag (uses: moul/gnopm@v0.13.0), or pass version:" >&2
+          exit 1
+        fi
+
+        # The runner spells these differently from the archives: RUNNER_OS is
+        # Linux/macOS/Windows and RUNNER_ARCH is X64/ARM64, while goreleaser
+        # names assets with the uname spellings. A lookup table, not a
+        # lowercase, which is #72's open question 5.
+        case "${RUNNER_OS}" in
+          Linux)   os=linux ;;
+          macOS)   os=darwin ;;
+          Windows) os=windows ;;
+          *)       os=unsupported ;;
+        esac
+        case "${RUNNER_ARCH}" in
+          X64)   arch=x86_64 ;;
+          ARM64) arch=arm64 ;;
+          *)     arch=unsupported ;;
+        esac
+
+        dir="${RUNNER_TEMP}/gnopm-bin"
+        mkdir -p "${dir}"
+
+        # The prebuilt archive first, and `go install` when there is not one:
+        # an unsupported platform, a branch ref with no release behind it, or
+        # GitHub having a bad day. The fallback is the four lines this action
+        # replaces, so the worst case is the status quo rather than a failure.
+        url="https://github.com/moul/gnopm/releases/download/${GNOPM_VERSION}/gnopm_${os}_${arch}.tar.gz"
+        if [ "${os}" != "unsupported" ] && [ "${arch}" != "unsupported" ] &&
+           [ "${os}" != "windows" ] && curl -sSfL -o "${dir}/gnopm.tar.gz" "${url}" 2>/dev/null; then
+          tar xzf "${dir}/gnopm.tar.gz" -C "${dir}" gnopm
+          rm -f "${dir}/gnopm.tar.gz"
+          echo "installed gnopm ${GNOPM_VERSION} from the release archive"
+        else
+          # Windows takes this path on purpose rather than an untested unzip:
+          # `go install` is portable, it is what the README recipe already
+          # does, and the runner has Go preinstalled.
+          echo "no release archive for ${os}/${arch} at ${GNOPM_VERSION}, building from source"
+          GOBIN="${dir}" go install "moul.io/gnopm@${GNOPM_VERSION}"
+        fi
+        echo "${dir}" >> "${GITHUB_PATH}"
+
+    - name: Run gnopm
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        GNOPM_ARGS: ${{ inputs.args }}
+      run: |
+        set -euo pipefail
+        gnopm version
+        # Unquoted on purpose: args is one string that the caller means as
+        # several words, which is the whole point of taking it as a string.
+        gnopm ${GNOPM_ARGS}
