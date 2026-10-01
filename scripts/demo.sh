@@ -593,9 +593,15 @@ name: CI
 on:
   push:
   pull_request:
-  # This workspace changes only when it is regenerated, and gnopm releases on
-  # its own clock. Weekly, so a release that stops agreeing with a workspace it
-  # used to pass turns something red without waiting for somebody to push.
+  # This workspace changes only when it is regenerated, so the weekly run is
+  # for everything else that moves underneath it: the runner image, the
+  # action's download host, GitHub itself.
+  #
+  # It used to be the canary for gnopm drift too, back when the workflow
+  # installed @latest. The action is pinned now, and that job moved upstream
+  # and got better: gnopm's own CI rebuilds this exact workspace from scratch
+  # on every pull request, on two operating systems, and runs the checks
+  # against it. Per push beats weekly.
   schedule:
     - cron: "17 6 * * 1"
 
@@ -608,13 +614,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # fetch-depth: 0 because gnomod.lock pins versions to commits, and a
-      # shallow clone has none of them.
+      # shallow clone has none of them. gnopm says so rather than reporting
+      # pins it cannot see as stranded, but it still cannot check them.
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: actions/setup-go@v5
-        with: { go-version: "1.24" }
-      - run: go install moul.io/gnopm@latest
-      - run: gnopm tool ci --comment
+      # Pinned, not floating: the action installs the gnopm that matches the
+      # tag you call it at, so this run cannot change under you.
+      - uses: moul/gnopm@v0.14.0
+        with:
+          args: tool ci --comment
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 YAML
