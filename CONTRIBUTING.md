@@ -14,8 +14,12 @@ make install      # put gnopm on your PATH
 Plain `go test ./...` and `go run . help` work too; the Makefile exists so that
 the checks here and the checks in CI cannot drift apart.
 
-No network, no gno toolchain, no dependencies. The integration test builds its
-own git repository in a temporary directory. `make lint` runs `gofmt` and
+No network, no gno toolchain, no keybase, no dependencies. The integration test
+builds its own git repository in a temporary directory, and `TestMain` points
+the `gnokey list` lookup at a stub, so the suite answers the same on a machine
+with a wallet as on one without. It used to answer differently (#70): green on
+CI, which has no keys, and red on every machine that could notice a real
+regression. A test that wants a resolved address opts in with `withKeys`. `make lint` runs `gofmt` and
 `go vet` always, and `staticcheck` when it is on your PATH, printing how to get
 it when it is not: keeping that optional is what preserves the no-network
 promise, and CI is where it is pinned and enforced.
