@@ -264,3 +264,106 @@ func readDirSafe(dir string) ([]string, error) {
 	}
 	return out, nil
 }
+
+// chainLockedRepo builds the shape moul/gnopm#71 was reported on: a one-module
+// workspace whose lock entry came from a chain, with the bytes wherever the
+// caller says. place is "vendor", "assembly", or "" for neither.
+func chainLockedRepo(t *testing.T, place string) (root, module string) {
+	t.Helper()
+	root = newRepo(t)
+	module = "gno.land/p/nt/ufmt/v0"
+	src := `// Package ufmt is a tiny formatter.
+package ufmt
+
+// Sprintf formats according to a format specifier.
+func Sprintf(format string, args ...string) string { return format }
+`
+	switch place {
+	case "vendor":
+		write(t, filepath.Join(vendorPathOf(root, module), "ufmt.gno"), src)
+	case "assembly":
+		write(t, filepath.Join(assemblyPathOf(root, module), "ufmt.gno"), src)
+	}
+	// The hash is real rather than a placeholder: doc does not check it, but a
+	// fixture that could not satisfy verify would be a fixture that proves
+	// nothing about the two agreeing, which is the whole point of #71.
+	hash := "h1:0000000000000000000000000000000000000000000000000000000000000000"
+	if place != "" {
+		dir := vendorPathOf(root, module)
+		if place == "assembly" {
+			dir = assemblyPathOf(root, module)
+		}
+		h, err := hashDownloaded(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hash = h
+	}
+	write(t, filepath.Join(root, lockFile), "lock = 1\n\n[[module]]\nmodule = \""+module+"\"\n"+
+		"source = { chain = \"gnoland-1\" }\nhash = \""+hash+"\"\n")
+	return root, module
+}
+
+// TestDocReadsAChainModuleWhereverItsBytesAre pins moul/gnopm#71.
+//
+// doc branched on Source.InTree(), so every entry that was not the working
+// tree went down the pinned-to-history path and was looked for in the assembly
+// alone. A vendored { chain } module is deliberately absent from there, so doc
+// called it unmaterialized and told you to run `gnopm sync`, which cannot
+// materialize what is already vendored. verify, on the same lock in the same
+// workspace, found it.
+//
+// Both chain placements are asserted, because the one that worked did so by
+// coincidence: the assembly path happened to be the one the pinned branch
+// built, not because anything knew about chain sources.
+func TestDocReadsAChainModuleWhereverItsBytesAre(t *testing.T) {
+	for _, tc := range []struct {
+		place string
+		where string
+	}{
+		{"vendor", "vendor/, published on gnoland-1"},
+		{"assembly", "the assembly, published on gnoland-1"},
+	} {
+		t.Run(tc.place, func(t *testing.T) {
+			root, module := chainLockedRepo(t, tc.place)
+			var out, errw bytes.Buffer
+			if err := Run([]string{"doc", "-C", root, module}, &out, &errw); err != nil {
+				t.Fatalf("doc on a chain module in %s: %v\n%s", tc.place, err, errw.String())
+			}
+			if !strings.Contains(out.String(), "func Sprintf(format string, args ...string) string") {
+				t.Errorf("the package was not documented:\n%s", out.String())
+			}
+			// The diagnostic has to name the place, or the next person debugging
+			// this reads "no directory" and goes looking in the wrong one.
+			if !strings.Contains(errw.String(), tc.where) {
+				t.Errorf("the diagnostic does not say where it read from, want %q:\n%s", tc.where, errw.String())
+			}
+			// "pinned" was the old word and it is wrong here: nothing pinned a
+			// module that was published to a chain.
+			if strings.Contains(errw.String(), "pinned") {
+				t.Errorf("a chain module is described as pinned:\n%s", errw.String())
+			}
+		})
+	}
+}
+
+// TestDocOnAChainModuleWithNoBytesNamesBothFixes: the error has to be
+// reachable. `gnopm sync` alone was the old advice and is only half of it,
+// since a self-contained workspace wants the copy committed.
+func TestDocOnAChainModuleWithNoBytesNamesBothFixes(t *testing.T) {
+	root, module := chainLockedRepo(t, "")
+	var out, errw bytes.Buffer
+	err := Run([]string{"doc", "-C", root, module}, &out, &errw)
+	if err == nil {
+		t.Fatal("doc worked with the bytes nowhere")
+	}
+	for _, want := range []string{"chain gnoland-1", "vendor/", "gnopm sync", "gnopm vendor"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not mention %q: %v", want, err)
+		}
+	}
+	// And it must not claim history it never had.
+	if strings.Contains(err.Error(), "pinned to history") {
+		t.Errorf("a chain module is reported as pinned to history: %v", err)
+	}
+}

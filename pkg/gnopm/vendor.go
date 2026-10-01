@@ -58,7 +58,23 @@ func vendored(root, module, want string) bool {
 // something there", which is what a report aimed at a human needs when the
 // alternative is telling them a directory they can see does not exist.
 func vendorExists(root, module string) bool {
-	st, err := os.Stat(vendorPathOf(root, module))
+	return dirExists(vendorPathOf(root, module))
+}
+
+// assemblyPathOf is where sync materializes a module that has no directory of
+// its own, whether it came from this repository's history or from a chain.
+//
+// One function rather than the same Join spelled out at each call site: three
+// of them had drifted into agreeing by coincidence, and #71 was doc looking in
+// the one place a vendored module is deliberately absent from.
+func assemblyPathOf(root, module string) string {
+	return filepath.Join(root, assemblyDir, filepath.FromSlash(module))
+}
+
+// dirExists is "is there a directory here", the question every fill order
+// asks between its steps.
+func dirExists(path string) bool {
+	st, err := os.Stat(path)
 	return err == nil && st.IsDir()
 }
 
@@ -96,7 +112,7 @@ func Vendor(e *Env) error {
 		}
 		// Reuse the assembly copy when it is the right one, so vendoring a
 		// workspace that already synced costs no chain reads at all.
-		src := filepath.Join(e.Root, assemblyDir, filepath.FromSlash(en.Module))
+		src := assemblyPathOf(e.Root, en.Module)
 		if h, err := hashDownloaded(src); err != nil || h != en.Hash {
 			c, err := DiscoverChain(e, en.Module, e.RPC, e.ChainID)
 			if err != nil {

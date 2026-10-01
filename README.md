@@ -287,6 +287,12 @@ So the compatibility diff of a bump is two commands:
   <img src="docs/img/doc.svg" alt="gnopm doc on a version that has no directory, and the two signatures of a bump side by side" width="800">
 </p>
 
+It reads a module wherever that module's bytes actually are, and says which of
+the three places it used: the working tree, `vendor/`, or the assembly. A
+dependency that came from a chain is looked for in `vendor/` first, the same
+order `verify` uses, so the two never disagree about whether a workspace has
+the source.
+
 **It needs no gno toolchain.** gno source is Go syntax, so the standard library
 parses it: measured against gno master on 2026-09-25, 1517 of 1517 `.gno` files
 under `examples/` parse, and across `examples`, `stdlibs` and
