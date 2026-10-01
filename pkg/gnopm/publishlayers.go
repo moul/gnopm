@@ -108,7 +108,7 @@ func creatorFor(gnokeyCmd, key, addr string) (string, error) {
 	if bech32ish(key) {
 		return key, nil
 	}
-	out, err := exec.Command(gnokeyCmd, "list").CombinedOutput()
+	out, err := listKeys(gnokeyCmd)
 	if err != nil {
 		return "", fmt.Errorf("%s list: %w", gnokeyCmd, err)
 	}
@@ -116,6 +116,19 @@ func creatorFor(gnokeyCmd, key, addr string) (string, error) {
 		return a, nil
 	}
 	return "", fmt.Errorf("no key named %q in `%s list`", key, gnokeyCmd)
+}
+
+// listKeys is how gnopm asks for the keybase listing. A package-level seam
+// like startClient, and for the same reason twice over: tests replace it, and
+// nothing else ever should.
+//
+// It exists because without it the suite answered differently depending on
+// whether the machine running it had gnokey installed with a key in it, which
+// made CI green and a developer machine red (#70). The call itself is correct
+// and stays: gnopm holds no key and parses no wallet, so asking the tool that
+// owns the keybase is what keeps it that way.
+var listKeys = func(gnokeyCmd string) ([]byte, error) {
+	return exec.Command(gnokeyCmd, "list").CombinedOutput()
 }
 
 // addrOf finds the address of the named key in `gnokey list` output.
