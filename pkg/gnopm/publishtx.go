@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -143,6 +144,11 @@ func AddPackageFor(dir, module, creator string, deposit int64) (AddPackageMsg, e
 	if pkg.Name == "" {
 		return AddPackageMsg{}, fmt.Errorf("%s: no production .gno file declares a package name, so there is nothing to deploy", dir)
 	}
+	// The chain refuses a package whose files are not in byte order
+	// ("mempackage ... has unsorted files", tm2/pkg/std/memfile.go), and the
+	// filetests folded in last break it as soon as one sorts before a
+	// production file: z_x_filetest.gno before zones.gno.
+	sort.Slice(pkg.Files, func(i, j int) bool { return pkg.Files[i].Name < pkg.Files[j].Name })
 	msg := AddPackageMsg{Type: addPackageType, Creator: creator, Package: pkg}
 	if deposit > 0 {
 		msg.MaxDeposit = strconv.FormatInt(deposit, 10) + "ugnot"

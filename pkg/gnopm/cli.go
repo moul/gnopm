@@ -630,6 +630,11 @@ version you are about to publish.
                which removes the half-deployed state a script can leave behind.
                It is also the shape a multisig ceremony needs, with -print.
                Named <file>.1, <file>.2 and so on, one per transaction.
+  -min-gas N   each package's gas_wanted is at least N. The estimate is
+               size-based and cannot see what init() does, so a package that
+               builds state at deploy time can outgrow it and fail after the fee
+               is paid. Measure it where it is already deployed (a testnet) and
+               pass that, with margin; the fee scales with it.
   -one-tx-per-package
                a transaction each, the unbatched shape. What to reach for when
                a layer is too big to review in one document, or when you want a
@@ -693,6 +698,7 @@ version you are about to publish.
 				fs.String("o", "", "write the unsigned transaction documents here instead of the cache")
 				fs.String("addr", "", "the creator address (default: asked of `gnokey list`)")
 				fs.Bool("one-tx-per-package", false, "a transaction each, instead of one per dependency layer")
+				fs.Int("min-gas", 0, "gas_wanted at least this per package: a figure measured on a testnet, for an init() the size estimate cannot see")
 				fs.Bool("republish", false, "also replace a live package whose source has changed, when the chain's copy is private")
 				fs.Bool("republish-docs", false, "with -republish, include a package whose only changes are .md files")
 			},
