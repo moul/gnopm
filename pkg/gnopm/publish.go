@@ -227,11 +227,20 @@ func uploadable(name string) bool {
 // pays, plus the part that does scale with the payload, clamped to what a block
 // can hold. See the gasFixed comment for where the two numbers come from and
 // why a per-byte figure alone cannot be a ceiling.
-func GasFor(bytes int) int64 {
+func GasFor(bytes int) int64 { return gasAtLeast(bytes, 0) }
+
+// gasAtLeast is GasFor raised to floor, still clamped to a block. The size
+// estimate cannot see what a package's init() does, and an init that builds
+// state outgrows it (a realm seeding four zones wanted 444M and used 533M), so
+// -min-gas takes a figure measured where it was already deployed, a testnet.
+func gasAtLeast(bytes int, floor int64) int64 {
 	if bytes < 0 {
 		bytes = 0
 	}
 	gas := gasFixed + int64(bytes)*gasPerByte
+	if gas < floor {
+		gas = floor
+	}
 	if gas > maxBlockGas {
 		return maxBlockGas
 	}

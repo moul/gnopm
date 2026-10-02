@@ -409,6 +409,13 @@ emits a wrapper instead of plain `gnokey`. Where a chain parks submissions, a
 green broadcast is not a deployment, so `parked` is reported as its own state
 rather than as success.
 
+Gas is the one figure the payload cannot settle. It is sized from the byte
+count, and a package whose `init()` builds state does work no byte count sees:
+a realm seeding four records at deploy wanted 444M and used 533M, and ran out
+after its fee was paid. A deploy cannot be simulated unsigned, so gnopm cannot
+measure it either. `-min-gas N` raises every package's `gas_wanted` to at least
+N: deploy to a testnet first, read `GAS USED` there, and pass that with margin.
+
 ### One signature for the whole deploy
 
 The command list is the lowest common denominator: it assumes the signer is a CLI

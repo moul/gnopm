@@ -376,3 +376,43 @@ func TestPublishTxBatchesToNumberedFiles(t *testing.T) {
 		}
 	}
 }
+
+// TestMessageFilesAreInByteOrder: the chain refuses a package whose files are
+// not sorted, and the folded-in filetests used to go last, so a filetest that
+// sorts before a production file (z_x before zones) made the message one no
+// chain accepts. Measured 2026-10-02 deploying r/moul/zones.
+func TestMessageFilesAreInByteOrder(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "zones.gno"), "package zones\n")
+	write(t, filepath.Join(dir, "README.md"), "# zones\n")
+	write(t, filepath.Join(dir, "gnomod.toml"), "module = \"x\"\n")
+	write(t, filepath.Join(dir, "filetests", "z_render_filetest.gno"), "package main\n\nfunc main() {}\n")
+	msg, err := AddPackageFor(dir, "gno.land/r/x/zones/v0", testCreator, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, f := range msg.Package.Files {
+		names = append(names, f.Name)
+	}
+	want := []string{"README.md", "gnomod.toml", "z_render_filetest.gno", "zones.gno"}
+	if strings.Join(names, " ") != strings.Join(want, " ") {
+		t.Fatalf("files = %v, want %v", names, want)
+	}
+}
+
+// TestMinGasRaisesTheEstimate: -min-gas is a floor, and the block still caps it.
+func TestMinGasRaisesTheEstimate(t *testing.T) {
+	if got := gasAtLeast(1000, 0); got != GasFor(1000) {
+		t.Fatalf("no floor: %d, want %d", got, GasFor(1000))
+	}
+	if got := gasAtLeast(1000, 800_000_000); got != 800_000_000 {
+		t.Fatalf("floor: %d", got)
+	}
+	if got := gasAtLeast(10_000_000, 1); got != GasFor(10_000_000) {
+		t.Fatalf("a floor below the estimate changes nothing: %d", got)
+	}
+	if got := gasAtLeast(1000, maxBlockGas*2); got != maxBlockGas {
+		t.Fatalf("the block caps it: %d", got)
+	}
+}

@@ -96,6 +96,7 @@ nobody dares change.
 | `scanPackages` / `readGnomod` in `workspace.go`: finding packages and their module line | `gno list`, `gnovm/cmd/gno/list.go` | 2026-09-19 |
 | `-f` in `format.go`: the go-template flag | `gno list -f`, same file | 2026-09-22 |
 | `isProdGno` in `edited.go`: which files the VM runs | the `_test.gno` / `_filetest.gno` split, `mempackage.go` | 2026-09-22 |
+| `AddPackageFor` in `publishtx.go`: the message's files in byte order | `MemPackage.ValidateBasic`'s `unsorted files` check and `Sort`, `tm2/pkg/std/memfile.go` | 2026-10-02 |
 
 **Linking gno instead was measured and rejected**, on this machine, against gno
 master on 2026-09-22. Importing `gnovm/pkg/packages`, which is what `gno list`

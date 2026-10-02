@@ -362,7 +362,7 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	// documents for a plan that cannot be signed is work nobody reads.
 	var hd *handoff
 	if out != "" && blockedCount(plans) == 0 && len(mismatched) == 0 && todoCount(plans) > 0 {
-		hd, err = buildHandoff(e, plans, deps, creator, out)
+		hd, err = buildHandoff(e, plans, deps, creator, out, int64(flagInt(fs, "min-gas")))
 		if err != nil {
 			return err
 		}
@@ -418,7 +418,7 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 		if !publishes(pl) {
 			continue
 		}
-		gas := GasFor(pl.bytes)
+		gas := gasAtLeast(pl.bytes, int64(flagInt(fs, "min-gas")))
 		totalFee += feeUgnot(gas)
 		cmds = append(cmds, publishCmd{
 			note: fmt.Sprintf("%s: %d bytes, %d gas (%d fixed + %d/byte), fee %s at %s ugnot/gas",
@@ -544,7 +544,7 @@ func blockedCount(plans []plan) int {
 // its dependency, which is the only ordering the chain cares about. See
 // publishlayers.go for why the whole graph is not batched into one transaction
 // instead.
-func buildHandoff(e *Env, plans []plan, deps map[string][]string, creator, out string) (*handoff, error) {
+func buildHandoff(e *Env, plans []plan, deps map[string][]string, creator, out string, minGas int64) (*handoff, error) {
 	layers, err := layerPlans(plans, deps)
 	if err != nil {
 		return nil, err
@@ -559,7 +559,7 @@ func buildHandoff(e *Env, plans []plan, deps map[string][]string, creator, out s
 				return nil, err
 			}
 			msgs = append(msgs, msg)
-			gasOf[pl.pkg.Module] = GasFor(pl.bytes)
+			gasOf[pl.pkg.Module] = gasAtLeast(pl.bytes, minGas)
 		}
 		part, err := batchDocuments(msgs, func(m AddPackageMsg) int64 { return gasOf[m.Package.Path] })
 		if err != nil {
