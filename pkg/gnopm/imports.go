@@ -69,8 +69,7 @@ func walkImports(base string, add func(from, to string)) error {
 			return nil // a missing assembly is not an error here
 		}
 		if d.IsDir() {
-			name := d.Name()
-			if p != base && (strings.HasPrefix(name, ".") || skipDirs[name]) {
+			if skipScan(base, p, d.Name()) {
 				return filepath.SkipDir
 			}
 			parent := ""

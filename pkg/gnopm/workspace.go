@@ -33,7 +33,29 @@ const stampFile = ".stamp"
 // yet. .gnopm/ is gnopm's own output, and treating it as a source of
 // workspace packages would make install see its own extractions as tree
 // packages on the second run.
-var skipDirs = map[string]bool{"vendor": true, assemblyDir: true}
+var skipDirs = map[string]bool{vendorDir: true, assemblyDir: true}
+
+// skipScan reports whether a walk rooted at base must not descend into the
+// directory p, named name.
+//
+// vendor/ is skipped only directly under base, which is the one place
+// third-party code is committed. Anywhere deeper it is part of a package
+// path the workspace owns: p/<user>/vendor/<pkg>, a namespace for preview
+// copies of other people's packages, is the user's own code, and skipping
+// it made gnopm blind to it (it could neither lock nor publish it) while
+// gno itself still resolved the import.
+func skipScan(base, p, name string) bool {
+	if p == base {
+		return false
+	}
+	if strings.HasPrefix(name, ".") {
+		return true
+	}
+	if name == vendorDir {
+		return filepath.Dir(p) == base
+	}
+	return skipDirs[name]
+}
 
 // Package is one buildable gno package found in the working tree.
 type Package struct {
@@ -87,11 +109,7 @@ func scanPackages(root string) ([]Package, error) {
 			return err
 		}
 		if d.IsDir() {
-			if p == root {
-				return nil
-			}
-			name := d.Name()
-			if strings.HasPrefix(name, ".") || skipDirs[name] {
+			if skipScan(root, p, d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
