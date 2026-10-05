@@ -434,6 +434,24 @@ func TestScanSkipsVendorAndAssembly(t *testing.T) {
 	}
 }
 
+// TestScanSeesNestedVendor pins that only the root vendor/ is third-party.
+// TestScanSkipsVendorAndAssembly could not see this: its vendor/ is at the
+// root, and the old rule skipped every directory named vendor at any depth,
+// so p/moul/vendor/nt/ufmt was invisible to lock and publish while gno
+// resolved it fine.
+func TestScanSeesNestedVendor(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "p/moul/vendor/nt/ufmt", "gno.land/p/moul/vendor/nt/ufmt/v2", "package ufmt\n")
+	addPkg(t, root, "vendor/gno.land/p/nt/avl/v0", "gno.land/p/nt/avl/v0", "package avl\n")
+	pkgs, err := scanPackages(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pkgs) != 1 || pkgs[0].Module != "gno.land/p/moul/vendor/nt/ufmt/v2" {
+		t.Fatalf("scan should see the nested vendor/ package and not the root one, got %+v", pkgs)
+	}
+}
+
 // --- helpers ----------------------------------------------------------------
 
 func newRepo(t *testing.T) string {
