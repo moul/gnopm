@@ -25,6 +25,9 @@ func TestMain(m *testing.M) {
 	listKeys = func(string) ([]byte, error) {
 		return nil, fmt.Errorf(`exec: "gnokey": executable file not found in $PATH`)
 	}
+	// Nor does the suite ask GitHub anything: a workspace whose origin points
+	// at github.com would otherwise make a publish test depend on the network.
+	repoIsPublic = func(string) (bool, error) { return false, fmt.Errorf("network disabled in tests") }
 	os.Exit(m.Run())
 }
 
