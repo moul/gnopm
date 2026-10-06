@@ -39,7 +39,10 @@ import "strings"
 
 // normalizeGnomod reduces a gnomod.toml to the lines that both sides can hold.
 //
-// Dropped: blank lines, whole-line comments, and the entire [addpkg] table.
+// Dropped: blank lines, whole-line comments, and the entire [addpkg] and
+// [source] tables. [source] is the one gnopm itself writes into the uploaded
+// copy and never into the tree (source.go), and its revision moves with every
+// commit: comparing it would make each commit look like a reason to redeploy.
 // Kept, with surrounding whitespace trimmed: everything else, in order.
 //
 // Inline trailing comments are deliberately NOT stripped. Doing it correctly
@@ -50,22 +53,22 @@ import "strings"
 // quietly mangled, which is the right way round.
 func normalizeGnomod(body string) string {
 	var out []string
-	inAddpkg := false
+	skipping := false
 	for _, line := range strings.Split(body, "\n") {
 		t := strings.TrimSpace(line)
 		if t == "" || strings.HasPrefix(t, "#") {
 			continue
 		}
-		// A table header ends whatever table preceded it, so [addpkg] is
-		// skipped up to the NEXT header rather than to the end of the file: a
-		// manifest may legitimately carry a table after it.
+		// A table header ends whatever table preceded it, so a dropped table
+		// is skipped up to the NEXT header rather than to the end of the file:
+		// a manifest may legitimately carry a table after it.
 		if strings.HasPrefix(t, "[") && strings.HasSuffix(t, "]") {
-			inAddpkg = t == "[addpkg]"
-			if inAddpkg {
+			skipping = t == "[addpkg]" || t == "[source]"
+			if skipping {
 				continue
 			}
 		}
-		if inAddpkg {
+		if skipping {
 			continue
 		}
 		out = append(out, t)

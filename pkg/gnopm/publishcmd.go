@@ -28,6 +28,10 @@ type plan struct {
 	// changed names the files that differ from the chain's copy, set only for
 	// a republish, so the report can say what the redeploy is actually for.
 	changed []string
+	// gnomod is the gnomod.toml body to upload in place of the one on disk,
+	// "" when they are the same. It differs by the [source] section, which
+	// gnopm writes into the uploaded copy only (source.go).
+	gnomod string
 	// skipped is why an already-live package the pattern selected will NOT be
 	// republished. Reported rather than silent: under -republish, a package
 	// quietly doing nothing is the failure mode worth spending a line on.
@@ -218,6 +222,7 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	}
 
 	haveInert := probe.CanPark()
+	sources := newSourceResolver(e, !flagBool(fs, "source"))
 	var plans []plan
 	for _, p := range ordered {
 		files, n, err := Payload(e.Root + "/" + p.Dir)
@@ -229,6 +234,9 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 			return err
 		}
 		pl := plan{pkg: p, state: state, bytes: n, files: files, dep: pulled[p.Module]}
+		if err := pl.stampSource(e.Root, sources); err != nil {
+			return err
+		}
 		for _, d := range deps[p.Module] {
 			ds, err := probe.State(d)
 			if err != nil {
@@ -558,6 +566,13 @@ func buildHandoff(e *Env, plans []plan, deps map[string][]string, creator, out s
 			if err != nil {
 				return nil, err
 			}
+			if pl.gnomod != "" {
+				for i := range msg.Package.Files {
+					if msg.Package.Files[i].Name == "gnomod.toml" {
+						msg.Package.Files[i].Body = pl.gnomod
+					}
+				}
+			}
 			msgs = append(msgs, msg)
 			gasOf[pl.pkg.Module] = gasAtLeast(pl.bytes, minGas)
 		}
@@ -700,4 +715,42 @@ func gnokeyCmdOf(fs *flag.FlagSet) string {
 		return c
 	}
 	return "gnokey"
+}
+
+// stampSource works out the gnomod.toml this package uploads, and moves the
+// byte count with it.
+//
+// The count matters more than it looks: gas and the storage-deposit ceiling are
+// both sized from pl.bytes, so a section added after sizing is a transaction
+// that asks for less than it is charged.
+func (pl *plan) stampSource(root string, r *sourceResolver) error {
+	path := filepath.Join(root, filepath.FromSlash(pl.pkg.Dir), "gnomod.toml")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	disk := string(b)
+	s, err := r.section(pl.pkg.Dir, disk)
+	if err != nil {
+		return err
+	}
+	body, err := withSource(disk, s)
+	if err != nil {
+		return err
+	}
+	if body == disk {
+		return nil
+	}
+	pl.gnomod = body
+	delta := len(body) - len(disk)
+	pl.bytes += delta
+	for i := range pl.files {
+		if pl.files[i].Name == "gnomod.toml" {
+			pl.files[i].Size += delta
+		}
+	}
+	return nil
 }

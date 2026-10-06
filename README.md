@@ -443,6 +443,37 @@ moment that account signs anything else. A deploy larger than one transaction
 (`MaxTxBytes` is 1,000,000 on `gnoland-1`) is split into `tx.1.json`, `tx.2.json`
 and so on, still in dependency order, each taking the next sequence.
 
+### Where the code lives: `[source]`
+
+gno lets a package say which repository it came from, and gnoweb links to it
+([gnolang/gno#6282](https://github.com/gnolang/gno/pull/6282)). `publish` writes
+that section for you, into the copy of `gnomod.toml` it uploads and **never into
+your working tree**:
+
+```toml
+[source]
+  repository = "https://github.com/moul/contracts"  # the git origin remote
+  path = "r/moul/app"                               # the package, from the repository root
+  revision = "3cc494ec4d1f…"                        # HEAD, when the package is clean
+```
+
+Nothing to commit, so nothing to go stale. The rules:
+
+- **A private repository is never named.** The origin goes up only if GitHub
+  answers, to a request without credentials, that it is public. Any other host,
+  no network, or a rate limit means no section.
+- **Declared wins.** A `[source]` table already in the file is kept, so a mirror
+  or a non-GitHub host is one line you write once. gnopm only fills in `path`
+  and `revision`.
+- **No revision for a dirty package.** If its directory has uncommitted changes,
+  HEAD is not what goes up, and the section is sent without one.
+- **A new commit is not a reason to redeploy.** The republish comparison ignores
+  `[source]`, the way it ignores the `[addpkg]` table the chain writes.
+
+`-source=false` turns it off. `-v` says, per package, why there is no section
+or no revision. A chain that does not know the section yet stores the package
+without it.
+
 ### The cache
 
 Asking a chain about two hundred packages is two hundred round trips, so the one
