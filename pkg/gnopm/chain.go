@@ -223,18 +223,36 @@ func (c *Chain) ABCIQuery(path, data string) (string, error) {
 // retrySleep is a variable so a test does not wait out a real backoff.
 var retrySleep = time.Sleep
 
-// maxQueryAttempts bounds postWithRetry, and maxQueryDelay caps one wait.
-// Eight tries at 1s, 2s, 4s, 8s, 16s, 32s, 60s is about two minutes.
+// Two budgets, because "ask me later" and "I am broken" deserve different
+// patience, and maxQueryDelay caps any one wait.
 //
-// Half a minute was the first guess here and it was measured wrong: a tripped
-// https://rpc.gno.land refuses for 66s (2026-10-08, polled every 3s from the
-// first 429 to the first 200), so a six-try schedule gives up inside the
-// window and reads exactly like no retry at all. Two minutes outlasts it and
-// still surfaces an endpoint that is genuinely down inside the same run.
+// maxThrottledAttempts: eight tries at 1s, 2s, 4s, 8s, 16s, 32s, 60s, about
+// two minutes. Half a minute was the first guess here and it was measured
+// wrong: a tripped https://rpc.gno.land refuses for 66s (2026-10-08, polled
+// every 3s from the first 429 to the first 200), so a six-try schedule expires
+// inside the window and reads exactly like no retry at all.
+//
+// maxUnavailableAttempts: three tries, 3s, for a transport failure or a 502,
+// 503 or 504. Those say a node or its gateway is down, and this tool's seventh
+// claim is that such a failure must surface as one. Spending the throttled
+// budget on it would turn a clear outage into a two minute hang, which is the
+// same bug in the other direction: TestProbeWarmReportsATransportFailureRather
+// ThanAbsence already takes 1m7s against a fake that is simply down.
 const (
-	maxQueryAttempts = 8
-	maxQueryDelay    = 60 * time.Second
+	maxThrottledAttempts   = 8
+	maxUnavailableAttempts = 3
+	maxQueryDelay          = 60 * time.Second
 )
+
+// attemptsFor is how many tries this answer is worth. A 429 is the endpoint
+// up, answering, and asking for less; everything else retryable here is it
+// being unreachable.
+func attemptsFor(resp *http.Response, err error) int {
+	if err == nil && resp != nil && resp.StatusCode == http.StatusTooManyRequests {
+		return maxThrottledAttempts
+	}
+	return maxUnavailableAttempts
+}
 
 // postWithRetry sends one JSON body, and tries again when the node says "slow
 // down" (429) or is briefly unavailable (502, 503, 504), honouring Retry-After
@@ -260,11 +278,11 @@ func postWithRetry(url string, body []byte) (*http.Response, error) {
 			if secs, perr := strconv.Atoi(resp.Header.Get("Retry-After")); perr == nil && secs > 0 && secs <= 60 {
 				wait = time.Duration(secs) * time.Second
 			}
-			if attempt == maxQueryAttempts {
+			if attempt >= attemptsFor(resp, err) {
 				return resp, nil // the caller reports the status
 			}
 			resp.Body.Close()
-		} else if attempt == maxQueryAttempts {
+		} else if attempt >= attemptsFor(resp, err) {
 			return nil, err
 		}
 		retrySleep(wait)

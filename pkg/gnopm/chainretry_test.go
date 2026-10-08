@@ -54,8 +54,8 @@ func TestABCIQueryGivesUpOnAPermanentlyThrottledNode(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "429") {
 		t.Fatalf("want a 429 error, got %v", err)
 	}
-	if atomic.LoadInt32(&calls) != maxQueryAttempts {
-		t.Fatalf("calls=%d, want %d", calls, maxQueryAttempts)
+	if atomic.LoadInt32(&calls) != maxThrottledAttempts {
+		t.Fatalf("calls=%d, want %d", calls, maxThrottledAttempts)
 	}
 }
 
@@ -146,5 +146,38 @@ func TestThrottledSpacingStaysUnderTheMeasuredCeiling(t *testing.T) {
 	if rate := float64(time.Minute) / float64(throttledSpacing); rate > ceiling {
 		t.Fatalf("spacing %v asks for %.0f queries a minute, over the %.0f the endpoint sustains",
 			throttledSpacing, rate, ceiling)
+	}
+}
+
+// A node that is simply down must be reported as down, fast. Retrying a 502 on
+// the throttled budget would hold every caller for two minutes before saying
+// so, and `Warm` fans out one of these per package: the whole suite paid 1m7s
+// for this one fake before the budgets were split.
+func TestABCIQueryGivesUpQuicklyOnAnUnavailableNode(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		http.Error(w, "gateway is having a day", http.StatusBadGateway)
+	}))
+	defer srv.Close()
+	var slept []time.Duration
+	retrySleep = func(d time.Duration) { slept = append(slept, d) }
+	spacing := throttledSpacing
+	throttledSpacing, paceSpacing = 0, 0
+	defer func() { retrySleep = time.Sleep; throttledSpacing = spacing; paceSpacing = 0 }()
+
+	_, err := (&Chain{RPC: srv.URL}).ABCIQuery("vm/qfile", "x")
+	if err == nil || !strings.Contains(err.Error(), "502") {
+		t.Fatalf("want a 502 error, got %v", err)
+	}
+	if atomic.LoadInt32(&calls) != maxUnavailableAttempts {
+		t.Fatalf("calls=%d, want %d", calls, maxUnavailableAttempts)
+	}
+	var total time.Duration
+	for _, d := range slept {
+		total += d
+	}
+	if total > 5*time.Second {
+		t.Fatalf("waited %v on a node that is down, want it reported promptly", total)
 	}
 }
