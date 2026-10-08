@@ -687,6 +687,11 @@ version you are about to publish.
                pulled in to satisfy an import is never republished: replacing it
                because something else mentions it is not what was asked.
 
+  -source      write [source] (repository, path, commit) into the uploaded
+               gnomod.toml, never into the working tree. On by default; only a
+               repository GitHub says is public is named, unless the file
+               declares [source] itself. -source=false to send the file as is.
+
   -v           say what is checked and whether the chain or the cache answered
   -no-cache    ask the chain everything, ignoring ~/.gnopm`,
 			flags: func(fs *flag.FlagSet) {
@@ -701,6 +706,7 @@ version you are about to publish.
 				fs.Int("min-gas", 0, "gas_wanted at least this per package: a figure measured on a testnet, for an init() the size estimate cannot see")
 				fs.Bool("republish", false, "also replace a live package whose source has changed, when the chain's copy is private")
 				fs.Bool("republish-docs", false, "with -republish, include a package whose only changes are .md files")
+				fs.Bool("source", true, "write [source] (repository, path, commit) into the uploaded gnomod.toml; never into the working tree")
 			},
 			run: cmdPublish,
 		},

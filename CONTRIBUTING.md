@@ -97,6 +97,8 @@ nobody dares change.
 | `-f` in `format.go`: the go-template flag | `gno list -f`, same file | 2026-09-22 |
 | `isProdGno` in `edited.go`: which files the VM runs | the `_test.gno` / `_filetest.gno` split, `mempackage.go` | 2026-09-22 |
 | `AddPackageFor` in `publishtx.go`: the message's files in byte order | `MemPackage.ValidateBasic`'s `unsorted files` check and `Sort`, `tm2/pkg/std/memfile.go` | 2026-10-02 |
+| `sourceSection.validate` in `source.go`: what a `[source]` section may hold | `gnomod.Source.Validate`, `gnovm/pkg/gnomod/file.go` ([gnolang/gno#6282](https://github.com/gnolang/gno/pull/6282), not merged yet) | 2026-10-06 |
+| `normalizeRemote` in `source.go`: a git remote as an https URL | `gitsource.NormalizeRemote`, `gnovm/pkg/gnomod/gitsource` (same PR) | 2026-10-06 |
 
 **Linking gno instead was measured and rejected**, on this machine, against gno
 master on 2026-09-22. Importing `gnovm/pkg/packages`, which is what `gno list`
