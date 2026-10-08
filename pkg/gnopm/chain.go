@@ -199,7 +199,7 @@ func (c *Chain) ABCIQuery(path, data string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	resp, err := httpClient.Post(c.RPC, "application/json", bytes.NewReader(body))
+	resp, err := postWithRetry(c.RPC, body)
 	if err != nil {
 		return "", fmt.Errorf("querying %s: %w", c.RPC, err)
 	}
@@ -218,6 +218,51 @@ func (c *Chain) ABCIQuery(path, data string) (string, error) {
 		return "", &ABCIError{Type: e.Type, Log: firstTrace(out.Result.Response.ResponseBase.Log)}
 	}
 	return string(out.Result.Response.ResponseBase.Data), nil
+}
+
+// retrySleep is a variable so a test does not wait out a real backoff.
+var retrySleep = time.Sleep
+
+// maxQueryAttempts bounds postWithRetry. Six tries at 1s, 2s, 4s, 8s, 16s is
+// about half a minute, which outlasts a public RPC's rate-limit window without
+// hiding an endpoint that is genuinely down.
+const maxQueryAttempts = 6
+
+// postWithRetry sends one JSON body, and tries again when the node says "slow
+// down" (429) or is briefly unavailable (502, 503, 504), honouring Retry-After
+// when it is given in seconds.
+//
+// A whole-repo scan, `publish -republish` over ~190 live packages, asks the
+// public RPC for several answers per package. Without this it died on the first
+// 429 with nothing reported (gno-contracts, 2026-10-08), so the one command that
+// finds every drifted realm could not be run over all of them.
+func postWithRetry(url string, body []byte) (*http.Response, error) {
+	delay := time.Second
+	for attempt := 1; ; attempt++ {
+		resp, err := httpClient.Post(url, "application/json", bytes.NewReader(body))
+		if err == nil && !retryableStatus(resp.StatusCode) {
+			return resp, nil
+		}
+		wait := delay
+		if err == nil {
+			if secs, perr := strconv.Atoi(resp.Header.Get("Retry-After")); perr == nil && secs > 0 && secs <= 60 {
+				wait = time.Duration(secs) * time.Second
+			}
+			if attempt == maxQueryAttempts {
+				return resp, nil // the caller reports the status
+			}
+			resp.Body.Close()
+		} else if attempt == maxQueryAttempts {
+			return nil, err
+		}
+		retrySleep(wait)
+		delay *= 2
+	}
+}
+
+func retryableStatus(code int) bool {
+	return code == http.StatusTooManyRequests || code == http.StatusBadGateway ||
+		code == http.StatusServiceUnavailable || code == http.StatusGatewayTimeout
 }
 
 // ABCIError is an answer, not a failure: the query reached a node and the node
