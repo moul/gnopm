@@ -239,11 +239,15 @@ const maxQueryAttempts = 6
 func postWithRetry(url string, body []byte) (*http.Response, error) {
 	delay := time.Second
 	for attempt := 1; ; attempt++ {
+		pace()
 		resp, err := httpClient.Post(url, "application/json", bytes.NewReader(body))
 		if err == nil && !retryableStatus(resp.StatusCode) {
 			return resp, nil
 		}
 		wait := delay
+		if err == nil && resp.StatusCode == http.StatusTooManyRequests {
+			slowDown()
+		}
 		if err == nil {
 			if secs, perr := strconv.Atoi(resp.Header.Get("Retry-After")); perr == nil && secs > 0 && secs <= 60 {
 				wait = time.Duration(secs) * time.Second
@@ -257,6 +261,40 @@ func postWithRetry(url string, body []byte) (*http.Response, error) {
 		}
 		retrySleep(wait)
 		delay *= 2
+	}
+}
+
+// Pacing is adaptive: full speed until a node says 429, then one query per
+// throttledSpacing for the rest of the process. Retrying alone does not get a
+// whole-repo scan through, because the scan keeps asking at the rate that
+// tripped the limit: the public RPC sustains about 1.6 queries a second from a
+// shell loop and refused gnopm's several-hundred back to back (2026-10-08).
+// Starting slow would tax every ordinary publish for the sake of the rare scan.
+var (
+	paceMu           sync.Mutex
+	paceSpacing      time.Duration
+	paceLast         time.Time
+	throttledSpacing = 400 * time.Millisecond
+)
+
+func slowDown() {
+	paceMu.Lock()
+	defer paceMu.Unlock()
+	paceSpacing = throttledSpacing
+}
+
+func pace() {
+	paceMu.Lock()
+	wait := time.Duration(0)
+	if paceSpacing > 0 {
+		if since := time.Since(paceLast); since < paceSpacing {
+			wait = paceSpacing - since
+		}
+	}
+	paceLast = time.Now().Add(wait)
+	paceMu.Unlock()
+	if wait > 0 {
+		retrySleep(wait)
 	}
 }
 
