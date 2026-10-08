@@ -223,10 +223,18 @@ func (c *Chain) ABCIQuery(path, data string) (string, error) {
 // retrySleep is a variable so a test does not wait out a real backoff.
 var retrySleep = time.Sleep
 
-// maxQueryAttempts bounds postWithRetry. Six tries at 1s, 2s, 4s, 8s, 16s is
-// about half a minute, which outlasts a public RPC's rate-limit window without
-// hiding an endpoint that is genuinely down.
-const maxQueryAttempts = 6
+// maxQueryAttempts bounds postWithRetry, and maxQueryDelay caps one wait.
+// Eight tries at 1s, 2s, 4s, 8s, 16s, 32s, 60s is about two minutes.
+//
+// Half a minute was the first guess here and it was measured wrong: a tripped
+// https://rpc.gno.land refuses for 66s (2026-10-08, polled every 3s from the
+// first 429 to the first 200), so a six-try schedule gives up inside the
+// window and reads exactly like no retry at all. Two minutes outlasts it and
+// still surfaces an endpoint that is genuinely down inside the same run.
+const (
+	maxQueryAttempts = 8
+	maxQueryDelay    = 60 * time.Second
+)
 
 // postWithRetry sends one JSON body, and tries again when the node says "slow
 // down" (429) or is briefly unavailable (502, 503, 504), honouring Retry-After
@@ -260,21 +268,30 @@ func postWithRetry(url string, body []byte) (*http.Response, error) {
 			return nil, err
 		}
 		retrySleep(wait)
-		delay *= 2
+		if delay *= 2; delay > maxQueryDelay {
+			delay = maxQueryDelay
+		}
 	}
 }
 
 // Pacing is adaptive: full speed until a node says 429, then one query per
 // throttledSpacing for the rest of the process. Retrying alone does not get a
 // whole-repo scan through, because the scan keeps asking at the rate that
-// tripped the limit: the public RPC sustains about 1.6 queries a second from a
-// shell loop and refused gnopm's several-hundred back to back (2026-10-08).
-// Starting slow would tax every ordinary publish for the sake of the rare scan.
+// tripped the limit. Starting slow would tax every ordinary publish for the
+// sake of the rare scan.
+//
+// 800ms, because the spacing has to sit under what the endpoint sustains and
+// 400ms did not. Measured on https://rpc.gno.land, 2026-10-08: 190 sequential
+// queries in 131s before the first 429, so the ceiling is near 90 a minute.
+// 400ms asks for 150 a minute, which keeps tripping the limit it was chosen to
+// avoid; 800ms asks for 75 and leaves room for whatever else shares the
+// address. A whole-repo `-republish` is slow either way, and slow finishing
+// beats fast failing.
 var (
 	paceMu           sync.Mutex
 	paceSpacing      time.Duration
 	paceLast         time.Time
-	throttledSpacing = 400 * time.Millisecond
+	throttledSpacing = 800 * time.Millisecond
 )
 
 func slowDown() {

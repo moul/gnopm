@@ -501,6 +501,24 @@ GNOPM_CACHE=off gnopm …   # the same, for a whole shell; or point it elsewhere
 gnopm env                 # where the cache is, among everything else gnopm worked out
 ```
 
+### Rate limits
+
+A public RPC limits by address, and gnopm is built to ask a lot of questions.
+Measured on `https://rpc.gno.land`, 2026-10-08: about **190 sequential reads in
+131s** before the first `429`, and once tripped it refuses for about **66s**. So
+the sustained ceiling is near 90 reads a minute, and the price of crossing it is
+a minute of nothing.
+
+gnopm runs at full speed until a node says `429`, then spaces its own queries at
+one every 800ms, 75 a minute, for the rest of the process. Pacing only after the
+first refusal is what keeps an ordinary publish fast: a short run never meets the
+limiter at all, and only the rare whole-repo scan pays.
+
+A `429` is also retried, backing off 1s, 2s, 4s, 8s, 16s, 32s, 60s. That is about
+two minutes, deliberately longer than the 66s cooldown: a schedule that gives up
+inside the window is the same as no retry at all. `Retry-After` is honored when
+the endpoint sends one.
+
 ## Replacing a package that is already live
 
 Some realms never get a `/vN`. If something external hard-codes the path, the
@@ -551,6 +569,13 @@ somebody wanted.
 
 Only packages the pattern named are considered: a dependency pulled in to satisfy
 an import is never republished.
+
+**Name a pattern.** Comparing one package to the chain is a read of its
+`gnomod.toml`, a read of its file list, then a read per file, so a bare
+`-republish` over a large workspace is thousands of round trips. On a
+304-package tree against `gnoland-1` that is tens of minutes, most of it spent
+under the rate limit above, where `gnopm publish -republish moul/home` answers
+the question you actually asked in well under one.
 
 ## Trees and graphs
 
