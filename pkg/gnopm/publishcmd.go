@@ -269,24 +269,30 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	if includeDocs {
 		republish = true
 	}
+	var scanner *republishScanner
 	if republish {
+		var targets []*plan
 		for i := range plans {
 			pl := &plans[i]
 			if pl.state != StateLive || pl.dep || len(pl.missing) > 0 {
 				continue
 			}
-			chk, err := checkRepublish(chain, e.Root, pl.pkg, includeDocs)
-			if err != nil {
-				return err
-			}
-			if !chk.eligible {
-				pl.skipped = chk.why
-				pl.changed = chk.changed
-				continue
-			}
-			pl.republish = true
-			pl.changed = chk.changed
+			targets = append(targets, pl)
 		}
+		// Batched and cached rather than a serial loop, because at workspace
+		// size the round trips are the entire cost: see republishscan.go.
+		scanner = &republishScanner{
+			chain:   chain,
+			root:    e.Root,
+			docs:    includeDocs,
+			private: openPrivateCache(e.cacheDir(), chain.ID),
+			source:  openSourceCache(e.cacheDir(), chain.ID),
+		}
+		start := time.Now()
+		if err := scanner.scan(targets); err != nil {
+			return err
+		}
+		e.tracef("chain    republish: compared %d live package(s) in %s\n", len(targets), took(start))
 	}
 
 	// Every message carries the creator as a field, so nothing can be batched
@@ -324,6 +330,23 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 		if _, hits, learned := probe.Cache().stats(); hits > 0 || learned > 0 {
 			e.logf("%s%s\n", e.label("cache"),
 				e.dim(fmt.Sprintf("%d answered, %d learned, in %s", hits, learned, tildePath(file))))
+		}
+	}
+	// The republish scan's own two caches, reported separately because they
+	// answer different questions and a reader deciding whether to pass
+	// -no-cache deserves to see which one carried the run.
+	if scanner != nil {
+		if _, hits, learned := scanner.private.stats(); hits > 0 || learned > 0 {
+			e.logf("%s%s\n", e.label("cache"),
+				e.dim(fmt.Sprintf("private: %d answered, %d learned", hits, learned)))
+		}
+		if _, hits, learned := scanner.source.stats(); hits > 0 || learned > 0 {
+			where := ""
+			if f := scanner.source.where(); f != "" {
+				where = ", in " + tildePath(f)
+			}
+			e.logf("%s%s\n", e.label("cache"),
+				e.dim(fmt.Sprintf("chain source: %d answered, %d read in full%s", hits, learned, where)))
 		}
 	}
 	if n := len(pulled); n > 0 {

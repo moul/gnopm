@@ -3,6 +3,7 @@ package gnopm
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -419,5 +420,193 @@ func (c *privateCache) where() string {
 	if c == nil {
 		return ""
 	}
+	return c.file
+}
+
+// sourceState is one chain's copy of one package, reduced to what a comparison
+// reads: the hash of every file's normalized body.
+//
+// Caching this is a weaker claim than live or private, and the line it rests on
+// is `vm/qstorage`. A package's bytes on chain change only when its creator
+// redeploys it, and a redeploy changes what the realm stores, so an unchanged
+// storage figure means an unchanged copy. State the realm accumulates moves
+// that figure too, which costs a re-read and never a wrong answer: the error is
+// one-sided by construction.
+//
+// The one case it would miss is a redeploy whose new source leaves the storage
+// total identical to the byte. That needs the source and the state to change by
+// exactly offsetting amounts, and -no-cache is there for anybody who has reason
+// to doubt it.
+type sourceState struct {
+	// storage is vm/qstorage's answer, kept verbatim rather than parsed: it is
+	// a token to compare, not a number to reason about.
+	storage string
+	// files maps a file name to the hash of its normalized body.
+	files map[string]string
+}
+
+// sourceCache is the chain copies one chain has already served.
+//
+// Append-only like the other two, so concurrent runs cannot clobber each other
+// and a torn write is a miss. Unlike them an entry is replaced rather than only
+// added, which the line format handles by letting a later line win: the file
+// grows, `gnopm clean` is where that is dealt with, and a cache that is wrong
+// about its own size is better than one that rewrites a document other
+// processes are appending to.
+type sourceCache struct {
+	file string
+
+	mu      sync.Mutex
+	state   map[string]sourceState
+	start   int
+	hits    int
+	learned int
+}
+
+// openSourceCache loads the cache for one chain. It never fails, for the same
+// reason the others do not: an empty cache is correct, just slower.
+func openSourceCache(dir, chainID string) *sourceCache {
+	c := &sourceCache{state: map[string]sourceState{}}
+	if dir == "" || chainID == "" || chainID == devChainID {
+		return c
+	}
+	name := cacheFileName(chainID)
+	if name == "" {
+		return c
+	}
+	c.file = filepath.Join(dir, "source", name)
+	b, err := os.ReadFile(c.file)
+	if err != nil {
+		return c
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		path, st, ok := parseSourceLine(line)
+		if !ok {
+			continue
+		}
+		c.state[path] = st
+	}
+	c.start = len(c.state)
+	return c
+}
+
+// parseSourceLine reads `<path> <storage> <name>=<hash> ...`, with the storage
+// figure's own spaces stripped so it survives a space-separated line. Anything
+// that does not parse is skipped, which costs a read and cannot mislead.
+func parseSourceLine(line string) (string, sourceState, bool) {
+	f := strings.Fields(strings.TrimSpace(line))
+	if len(f) < 2 {
+		return "", sourceState{}, false
+	}
+	st := sourceState{storage: f[1], files: map[string]string{}}
+	for _, pair := range f[2:] {
+		name, hash, ok := strings.Cut(pair, "=")
+		if !ok || name == "" || hash == "" {
+			return "", sourceState{}, false
+		}
+		st.files[name] = hash
+	}
+	return f[0], st, true
+}
+
+// lookup returns the cached copy only when the storage token still matches,
+// which is the whole safety argument: a stale entry is never returned, it is
+// simply not a hit.
+func (c *sourceCache) lookup(path, storage string) (map[string]string, bool) {
+	if c == nil || storage == "" {
+		return nil, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st, ok := c.state[path]
+	if !ok || st.storage != storage {
+		return nil, false
+	}
+	c.hits++
+	return st.files, true
+}
+
+// learn records a copy and appends it straight away, so a run killed half way
+// through keeps what it read.
+//
+// A file name with a space in it is skipped rather than written, because it
+// would make the line unparseable and a cache that cannot be read back is worse
+// than one entry missing. gno file names are identifiers plus an extension, so
+// this has no live cases and exists to keep the format total.
+func (c *sourceCache) learn(path, storage string, files map[string]string) {
+	if c == nil || path == "" || storage == "" {
+		return
+	}
+	if strings.ContainsAny(storage, " \t\n") {
+		return
+	}
+	for name := range files {
+		if strings.ContainsAny(name, " \t\n=") {
+			return
+		}
+	}
+	c.mu.Lock()
+	c.state[path] = sourceState{storage: storage, files: files}
+	c.learned++
+	file := c.file
+	c.mu.Unlock()
+	if file == "" {
+		return
+	}
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	b.WriteString(path)
+	b.WriteString(" ")
+	b.WriteString(storage)
+	for _, name := range names {
+		b.WriteString(" ")
+		b.WriteString(name)
+		b.WriteString("=")
+		b.WriteString(files[name])
+	}
+	b.WriteString("\n")
+
+	// A cache that cannot be written is still a correct cache, so every failure
+	// here disables persistence for the rest of the run and says nothing.
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		c.disable()
+		return
+	}
+	f, err := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		c.disable()
+		return
+	}
+	defer f.Close()
+	if _, err := f.WriteString(b.String()); err != nil {
+		c.disable()
+	}
+}
+
+func (c *sourceCache) disable() {
+	c.mu.Lock()
+	c.file = ""
+	c.mu.Unlock()
+}
+
+func (c *sourceCache) stats() (start, hits, learned int) {
+	if c == nil {
+		return 0, 0, 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.start, c.hits, c.learned
+}
+
+func (c *sourceCache) where() string {
+	if c == nil {
+		return ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.file
 }
