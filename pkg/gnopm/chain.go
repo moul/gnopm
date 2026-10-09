@@ -46,12 +46,14 @@ type Chain struct {
 // MaxIdleConnsPerHost is the number that matters here, because every query in
 // a run goes to one host: the default of 2 would serialize the concurrent
 // probe back down to two connections and give away what the pool just bought.
+// It is sized to the widest batch in the program, not the first one written,
+// or that batch's extra workers queue for a connection instead of a node.
 var httpClient = &http.Client{
 	Timeout: 30 * time.Second,
 	Transport: &http.Transport{
 		Proxy:               http.ProxyFromEnvironment,
-		MaxIdleConns:        4 * probeConcurrency,
-		MaxIdleConnsPerHost: probeConcurrency,
+		MaxIdleConns:        4 * scanConcurrency,
+		MaxIdleConnsPerHost: scanConcurrency,
 		IdleConnTimeout:     90 * time.Second,
 		ForceAttemptHTTP2:   true,
 	},

@@ -41,14 +41,23 @@ type republishCheck struct {
 	changed []string
 }
 
-// checkRepublish compares the working tree's copy of p against the chain's.
+// checkRepublish compares one package with no caches and no batch, which is
+// what the tests want and what a single-package run does anyway.
 //
-// Two queries per package: the gnomod.toml for the private flag, then the file
-// list, then one per differing name. That is more round trips than the rest of
-// publish spends on a package, and it is why this runs only for packages the
-// pattern selected and only under -republish.
+// The workspace-wide path goes through republishScanner, because at 282 live
+// packages the round trips, not the comparison, are the whole cost.
 func checkRepublish(c *Chain, root string, p Package, includeDocs bool) (republishCheck, error) {
-	private, ok, err := chainPrivate(c, p.Module)
+	return (&republishScanner{chain: c, root: root, docs: includeDocs}).check(p)
+}
+
+// check compares the working tree's copy of p against the chain's.
+//
+// Worst case it is the gnomod.toml for the private flag, then the file list,
+// then one read per file. Best case, a public package whose flag is already on
+// disk, it is no reads at all.
+func (s *republishScanner) check(p Package) (republishCheck, error) {
+	root, includeDocs := s.root, s.docs
+	private, ok, err := s.chainPrivateCached(p.Module)
 	if err != nil {
 		return republishCheck{}, err
 	}
@@ -65,7 +74,7 @@ func checkRepublish(c *Chain, root string, p Package, includeDocs bool) (republi
 			"and the flag binds at the first publish and cannot be changed after"}, nil
 	}
 
-	onChain, err := chainSource(c, p.Module)
+	onChain, _, err := s.chainSourceHashes(p.Module)
 	if err != nil {
 		return republishCheck{}, err
 	}
@@ -74,7 +83,7 @@ func checkRepublish(c *Chain, root string, p Package, includeDocs bool) (republi
 		return republishCheck{}, err
 	}
 
-	changed := diffSource(local, onChain)
+	changed := diffHashed(hashSource(local), onChain)
 	if len(changed) == 0 {
 		return republishCheck{why: "identical to the chain's copy, byte for byte: " +
 			"a redeploy would spend gas and reset realm state to arrive where it already is"}, nil
@@ -144,21 +153,29 @@ func localSource(dir string) (map[string]string, error) {
 // diffSource names every file that differs, in a stable order, marking which
 // side it is missing from. A rename shows up as one added and one removed,
 // which is what happened as far as the chain is concerned.
+//
+// Both sides go through normalizeForCompare before anything is compared,
+// because the chain rewrites gnomod.toml rather than storing what it was sent.
+// See gnomodnorm.go: a byte comparison marks that file as changed forever, for
+// every package, which is how this check first reported drift on a realm
+// redeployed minutes earlier.
 func diffSource(local, onChain map[string]string) []string {
+	return diffHashed(hashSource(local), hashSource(onChain))
+}
+
+// diffHashed is diffSource over the hashes, which is the form the chain's copy
+// is cached in: a comparison only ever asks whether two bodies are the same,
+// so the bodies themselves are not worth keeping or re-fetching.
+func diffHashed(local, onChain map[string]string) []string {
 	seen := map[string]bool{}
 	var out []string
-	for name, body := range local {
+	for name, h := range local {
 		seen[name] = true
 		other, ok := onChain[name]
 		switch {
 		case !ok:
 			out = append(out, name+" (new)")
-		// Compared through normalizeForCompare, because the chain rewrites
-		// gnomod.toml rather than storing what it was sent. See gnomodnorm.go:
-		// a byte comparison marks that file as changed forever, for every
-		// package, which is how this check first reported drift on a realm
-		// redeployed minutes earlier.
-		case normalizeForCompare(name, other) != normalizeForCompare(name, body):
+		case other != h:
 			out = append(out, name)
 		}
 	}

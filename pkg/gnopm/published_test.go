@@ -46,6 +46,15 @@ type fakeChain struct {
 	// get` needs, because it reads the bodies. A path present here answers
 	// both qfile shapes for real and takes precedence over live.
 	files map[string]string
+	// storage is what vm/qstorage answers per path. A path with no entry gets
+	// the error a chain without that query gives, which is the fallback the
+	// republish scan has to keep working through.
+	storage map[string]string
+	// onQuery, when set, runs at the top of every served query. A test that
+	// wants to know whether a batch is actually parallel has no other way to
+	// see it: a fake answers fast enough that a serial loop and a wide one
+	// finish in the same instant.
+	onQuery func()
 
 	// mu guards calls, and live/parked against the concurrent reads Warm
 	// makes. Serial probing needed none of this; a batch does.
@@ -68,11 +77,15 @@ func newFakeChain(t *testing.T) *fakeChain {
 	// would make the next test's "v0 is absent" pass or fail depending on what
 	// ran before it, and `go test` would write to a developer's home.
 	t.Setenv(cacheEnv, t.TempDir())
-	f := &fakeChain{live: map[string]bool{}, parked: map[string]bool{}, private: map[string]bool{}, files: map[string]string{}}
+	f := &fakeChain{live: map[string]bool{}, parked: map[string]bool{}, private: map[string]bool{}, files: map[string]string{}, storage: map[string]string{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.calls++
+		hook := f.onQuery
 		f.mu.Unlock()
+		if hook != nil {
+			hook()
+		}
 		if f.down {
 			http.Error(w, "gateway is having a day", http.StatusBadGateway)
 			return
@@ -113,6 +126,16 @@ func newFakeChain(t *testing.T) *fakeChain {
 				paths = append(paths, p)
 			}
 			writeABCIData(w, strings.Join(paths, "\n"))
+		case "vm/qstorage":
+			p := string(req.Params.Data)
+			f.mu.Lock()
+			v, ok := f.storage[p]
+			f.mu.Unlock()
+			if !ok {
+				writeABCIError(w, "/vm.InvalidPkgPathError", "no storage for "+p)
+				return
+			}
+			writeABCIData(w, v)
 		case "vm/qpaths":
 			// The live key space under a prefix, which is what search reads.
 			// The limit rides on the ABCI path as a query string, exactly as
@@ -801,6 +824,10 @@ func TestTidyDryRunWritesNothing(t *testing.T) {
 // other, which on a real workspace is a minute of a terminal that looks hung.
 // Nothing about the answers interacts, so the batch parallelizes exactly; what
 // it must not do is ask twice, or leave State to ask again afterwards.
+//
+// It is now one vm/qpaths for the whole namespace rather than N reads, so the
+// count asserted here is 1: see bulkresolve.go. The rest of the contract is
+// unchanged and is what the count is guarding.
 func TestProbeWarmAsksOncePerPathAndCachesTheAnswers(t *testing.T) {
 	f := newFakeChain(t)
 	modules := []string{}
@@ -830,8 +857,9 @@ func TestProbeWarmAsksOncePerPathAndCachesTheAnswers(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.count() - afterInert; got != len(modules) {
-		t.Fatalf("Warm made %d queries for %d distinct paths", got, len(modules))
+	if got := f.count() - afterInert; got != 1 {
+		t.Fatalf("Warm made %d queries for %d distinct paths in one namespace, want 1 bulk read",
+			got, len(modules))
 	}
 	if len(seen) != len(modules) {
 		t.Fatalf("step was called %d time(s), want %d", len(seen), len(modules))

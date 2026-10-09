@@ -212,7 +212,32 @@ func (p *Probe) Warm(modules []string, step func(done, total int, module string)
 	if len(cold) == 0 {
 		return nil
 	}
-	todo = cold
+	// The progress total is the batch the caller handed over, counted before
+	// anything resolves it. A bulk read that answers half of them must not
+	// make the bar jump to "6 of 6": the work is the same work, it just took
+	// fewer queries.
+	total := len(cold)
+	var (
+		doneMu sync.Mutex
+		done   int
+	)
+	bump := func(m string) {
+		if step == nil {
+			return
+		}
+		doneMu.Lock()
+		done++
+		n := done
+		doneMu.Unlock()
+		step(n, total, m)
+	}
+
+	// One vm/qpaths per namespace, before any per-path read: see
+	// bulkresolve.go. What it declines to answer falls through unchanged.
+	todo = p.bulkResolve(cold, bump)
+	if len(todo) == 0 {
+		return nil
+	}
 
 	workers := probeConcurrency
 	if len(todo) < workers {
@@ -223,7 +248,6 @@ func (p *Probe) Warm(modules []string, step func(done, total int, module string)
 		wg       sync.WaitGroup
 		errMu    sync.Mutex
 		firstErr error
-		done     int
 	)
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
@@ -250,13 +274,7 @@ func (p *Probe) Warm(modules []string, step func(done, total int, module string)
 				p.cache[m] = s
 				p.mu.Unlock()
 				p.trace(s, m, "chain, "+took(start))
-				if step != nil {
-					errMu.Lock()
-					done++
-					n := done
-					errMu.Unlock()
-					step(n, len(todo), m)
-				}
+				bump(m)
 			}
 		}()
 	}

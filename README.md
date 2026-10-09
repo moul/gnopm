@@ -476,18 +476,27 @@ without it.
 
 ### The cache
 
-Asking a chain about two hundred packages is two hundred round trips, so the one
-answer that cannot change is kept. A path that is live on a chain stays live:
-there is no delete. `~/.gnopm/live/<chain-id>` remembers those, one path per
-line, and later runs only ask about what is missing.
+Asking a chain about two hundred packages is two hundred round trips, so the
+answers that cannot change are kept. Three files, under `~/.gnopm/`, keyed by
+chain id.
 
-Live is all that is cached, and it is cached because it is the answer that cannot
-change. The *bytes* at a live path can: a package whose mempackage declared
-`private = true` may be replaced by the address that created it, which is what
-`-republish` is for. That never reads the cache, because what it compares is the
-source, and the source is exactly the thing that moved. Measured on a 193-package
-workspace against `gnoland-1`: **5.8s** asking the chain everything, **0.67s**
-once the cache is warm, same script out.
+**`live/`** is the set of paths this chain has said are live. A live path stays
+live: there is no delete. Measured on a 193-package workspace against
+`gnoland-1`: **5.8s** asking the chain everything, **0.67s** once it is warm.
+
+**`private/`** is whether a live path's copy declares `private`, which is fixed
+in both directions at first publish (the source of that claim is in
+`pkg/gnopm/cache.go`, and it is the chain's own keeper). It is what decides
+whether `-republish` can do anything at all, and on a large workspace it is most
+of the answer: on moul/gno-contracts, 227 of 282 live packages are public and
+therefore frozen, so the whole question is one read each, ever.
+
+**`source/`** is the chain's copy of a package, reduced to one hash per file.
+This is a weaker claim than the other two and it rests on a line: a package's
+bytes on chain change only when its creator redeploys it, so `vm/qstorage`, one
+read, says whether the copy on disk is still the chain's. A figure that moved
+means a re-read; realm state moves it too, which costs a re-read and never a
+wrong answer. Your own working tree is never cached, so an edit is always seen.
 
 `parked` and `absent` are never remembered: a parked submission can still be
 enabled or rejected, and absent is the state of the very version you are about to
@@ -570,12 +579,26 @@ somebody wanted.
 Only packages the pattern named are considered: a dependency pulled in to satisfy
 an import is never republished.
 
-**Name a pattern.** Comparing one package to the chain is a read of its
-`gnomod.toml`, a read of its file list, then a read per file, so a bare
-`-republish` over a large workspace is thousands of round trips. On a
-304-package tree against `gnoland-1` that is tens of minutes, most of it spent
-under the rate limit above, where `gnopm publish -republish moul/home` answers
-the question you actually asked in well under one.
+Comparing one package to the chain is a read of its `gnomod.toml`, a read of its
+file list, then a read per file, and a workspace-wide `-republish` used to run
+that serially for every live package. On moul/gno-contracts, 304 packages
+against `gnoland-1`, that was **1269s end to end** and usually a rate-limit
+failure before the end of it.
+
+It is now batched and cached: one `vm/qpaths` per namespace instead of one read
+per path, the permanent `private` answer off disk, and one `vm/qstorage` per
+package to decide whether its source needs re-reading at all. Same report, same
+tree, same chain:
+
+| | before | after |
+|---|---|---|
+| whole workspace, warm | 1269s | **8.2s** |
+| whole workspace, `private/` and `source/` empty | 1269s | **47s** |
+| whole workspace, first run on a new machine | 1269s | **66s** |
+| `gnopm publish -republish moul/home` | 7.7s | **1.4s** |
+
+Measured 2026-10-09 against `gnoland-1` from one host, same report out of every
+run. "Before" is v0.16.3, which did finish; the version before that did not.
 
 ## Trees and graphs
 
