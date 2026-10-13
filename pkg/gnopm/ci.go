@@ -74,9 +74,8 @@ func CI(e *Env, opts CIOptions) error {
 		add("pins survive a squash merge", stranded(e.Root, pinned, base),
 			"every pin is already on "+base)
 
-		// The one check that needs a chain, and the one that warns instead of
-		// failing. It runs last so a network round trip never delays a verdict
-		// the repository could reach on its own.
+		// The one check that needs a chain. It runs last so a network round
+		// trip never delays a verdict the repository could reach on its own.
 		switch edited, err := editedInPlace(e.Root, pkgs, base); {
 		case err != nil:
 			skip(publishedEditCheck, firstLine(err.Error()))
@@ -91,15 +90,38 @@ func CI(e *Env, opts CIOptions) error {
 					len(edited), firstLine(err.Error())))
 				break
 			}
-			hit, err := publishedEdits(edited, probe.Published)
-			switch {
-			case err != nil:
+			// Cached across runs, because `private` binds at the first publish
+			// and can never change: see cache.go. The scanner is built for its
+			// one cached reader, so nothing here needs the source cache.
+			sc := &republishScanner{
+				chain:   probe.Chain(),
+				root:    e.Root,
+				private: openPrivateCache(e.cacheDir(), probe.Chain().ID),
+			}
+			redeployable := func(module string) (bool, error) {
+				private, ok, err := sc.chainPrivateCached(module)
+				return private && ok, err
+			}
+			verdicts, err := classifyEdits(edited, probe.State, redeployable)
+			if err != nil {
 				skip(publishedEditCheck, firstLine(err.Error()))
-			case len(hit) == 0:
+				break
+			}
+			frozen, redeploy := split(verdicts)
+			if len(frozen) > 0 {
+				// A failure, not a warning. The edit cannot reach the chain by
+				// any transaction, so a green build here is a build that
+				// certifies something nobody will ever run.
+				checks = append(checks, check{publishedEditCheck, frozenEditError(frozen), false, false})
+			} else {
 				checks = append(checks, check{publishedEditCheck,
-					fmt.Sprintf("%d edited in place, none published on %s", len(edited), probe.Chain().ID), true, false})
-			default:
-				checks = append(checks, check{publishedEditCheck, editedWarning(hit), false, true})
+					fmt.Sprintf("%d edited in place, none frozen on %s", len(edited), probe.Chain().ID), true, false})
+			}
+			// Reported separately and never fatal: for a `private` package,
+			// editing in place is the only route it has, and the thing worth
+			// saying out loud is what the redeploy costs.
+			if len(redeploy) > 0 {
+				checks = append(checks, check{redeployNeededCheck, redeployNote(redeploy), false, true})
 			}
 		}
 	}
@@ -165,6 +187,11 @@ const ciMarker = "<!-- gnopm-ci-report -->"
 // publishedEditCheck is named once: the report, the skips and the tests all
 // read the same string, so a reworded check cannot half-rename itself.
 const publishedEditCheck = "published versions are not edited in place"
+
+// redeployNeededCheck is its softer half: the edit CAN reach the chain, and
+// only through a redeploy that wipes realm state. Two rows rather than one,
+// because they have two different fixes and only one of them is an error.
+const redeployNeededCheck = "an edited private version still needs a redeploy"
 
 func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {

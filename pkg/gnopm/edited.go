@@ -16,10 +16,25 @@ import (
 // consistent throughout, every pin reproduced, and nothing survived a squash
 // merge wrongly. This file is the check that was missing.
 //
-// It warns rather than fails. A repository can have a good reason to edit a
-// published version, a comment, a doc string, a test helper that happens to
-// live in a prod file, and turning that into a red build teaches people to skip
-// the check. Naming it is enough, because the fix is one command.
+// It warned rather than failed, and that was wrong. moul/gno-contracts#331
+// carried this exact warning, naming all five packages and saying in so many
+// words that the edit could never reach a chain; it was merged anyway, and five
+// days later three of those paths were still serving the uncapped code the pull
+// request was written to fix (gno-contracts#331, 2026-10-08 to 2026-10-13). A
+// warning on a thing that cannot work is a warning nobody has to act on.
+//
+// So the verdict now depends on what the chain would actually accept, which is
+// the one question with a real answer:
+//
+//   - absent: the version was published to nobody, so v0 is still the version
+//     to edit. Silent, and the common case.
+//   - live and `private`: a second MsgAddPackage at the same path is allowed,
+//     so the edit CAN reach the chain. Reported, because the redeploy re-runs
+//     init() and wipes realm state, and never failed, because editing in place
+//     is the only route such a package has.
+//   - anything else: no transaction will ever carry this edit. That is a
+//     failure, and there is no good reason to hold the opposite: the tree would
+//     be describing code that is not running and never will.
 
 // editedInPlace returns the packages whose PRODUCTION source this branch
 // changes without moving their module line.
@@ -101,32 +116,111 @@ func moduleAt(root, ref, dir string) (string, error) {
 	return module, err
 }
 
-// publishedEdits filters editedInPlace down to the versions a chain actually
-// has, and describes what it found.
+// editVerdict is one package edited in place, and what the chain says about the
+// version it still declares.
+type editVerdict struct {
+	Pkg   Package
+	State PackageState
+	// Redeployable is true only for a live path whose chain copy declares
+	// `private`. The flag binds at the first publish and cannot be changed
+	// after, so it is read from the chain and never from the working tree: a
+	// tree that added it afterwards is describing a promise it never made, and
+	// the transaction would be refused as "package already exists".
+	Redeployable bool
+}
+
+// classifyEdits asks the chain about every package edited in place.
 //
-// published is the question asked of the chain, injected so the report path is
-// testable without a network: CI passes a Probe, tests pass an answer.
-func publishedEdits(edited []Package, published func(module string) (bool, error)) ([]Package, error) {
-	var out []Package
+// state and redeployable are injected rather than taken as a *Probe so the
+// report path is testable without a network: CI passes the probe's methods,
+// tests pass answers. Same reason the previous shape took a `published` func,
+// and the same seventh claim in CONTRIBUTING applies to both: an error here is
+// a node that did not reply, never a node that said no.
+func classifyEdits(
+	edited []Package,
+	state func(module string) (PackageState, error),
+	redeployable func(module string) (bool, error),
+) ([]editVerdict, error) {
+	var out []editVerdict
 	for _, p := range edited {
-		yes, err := published(p.Module)
+		st, err := state(p.Module)
 		if err != nil {
 			return nil, err
 		}
-		if yes {
-			out = append(out, p)
+		if st == StateAbsent {
+			continue // published to nobody, so this is the version to edit
 		}
+		v := editVerdict{Pkg: p, State: st}
+		// Only a live path has a gnomod.toml to read. A parked one is a
+		// submission an approver can still reject, and its bytes do not answer
+		// vm/qfile the way a live path's do, so asking would produce "the chain
+		// has no gnomod.toml" and mean something else entirely.
+		if st == StateLive {
+			priv, err := redeployable(p.Module)
+			if err != nil {
+				return nil, err
+			}
+			v.Redeployable = priv
+		}
+		out = append(out, v)
 	}
 	return out, nil
 }
 
-// editedWarning is the sentence the report carries. It names the command,
-// because an author who has to look one up will instead do nothing.
-func editedWarning(pkgs []Package) string {
-	names := make([]string, 0, len(pkgs))
-	for _, p := range pkgs {
-		names = append(names, "`"+p.Module+"`")
+// split separates the verdicts that can never reach a chain from the ones that
+// can, because they are two different sentences with two different fixes.
+func split(vs []editVerdict) (frozen, redeployable []editVerdict) {
+	for _, v := range vs {
+		if v.Redeployable {
+			redeployable = append(redeployable, v)
+			continue
+		}
+		frozen = append(frozen, v)
 	}
-	return fmt.Sprintf("%s is published and cannot be redeployed, so this edit can never reach a chain. `gnopm bump -if-published %s`",
-		strings.Join(names, ", "), pkgs[0].Dir)
+	return frozen, redeployable
+}
+
+// frozenEditError is the sentence that fails the run. It names the command,
+// because an author who has to look one up will instead do nothing.
+func frozenEditError(vs []editVerdict) string {
+	is, why := "is", "published and not `private`, so no transaction can ever carry this edit"
+	if len(vs) > 1 {
+		is = "are"
+	}
+	if allParked(vs) {
+		why = "parked: the bytes an approver is looking at are not these, and they cannot be re-sent"
+	}
+	return fmt.Sprintf("%s %s %s. `gnopm bump -if-published %s`", modules(vs), is, why, vs[0].Pkg.Dir)
+}
+
+// allParked reports whether every verdict is a parked submission, which is the
+// one case with a different reason and the same fix.
+func allParked(vs []editVerdict) bool {
+	for _, v := range vs {
+		if v.State != StateParked {
+			return false
+		}
+	}
+	return len(vs) > 0
+}
+
+// redeployNote is the sentence that does not fail the run: the edit is the only
+// route this package has, and the cost is the one thing the author has to weigh.
+func redeployNote(vs []editVerdict) string {
+	declares := "declares"
+	if len(vs) > 1 {
+		declares = "declare"
+	}
+	return fmt.Sprintf("%s %s `private` on the chain, so the edit reaches it only through a redeploy, "+
+		"which re-runs init() and resets realm state. `gnopm publish`", modules(vs), declares)
+}
+
+// modules renders a verdict list as the backticked module paths, in the order
+// editedInPlace sorted them.
+func modules(vs []editVerdict) string {
+	names := make([]string, 0, len(vs))
+	for _, v := range vs {
+		names = append(names, "`"+v.Pkg.Module+"`")
+	}
+	return strings.Join(names, ", ")
 }

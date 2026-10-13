@@ -750,7 +750,12 @@ merge produces.
 ```
 
 That installs the prebuilt release binary and runs `gnopm tool ci`, which is the
-four checks plus the lock diff, posted to the job summary. `args` takes anything
+four checks plus the lock diff, posted to the job summary. The published-edit
+check is the one that reads a chain, and it fails the run when the edit could
+never land there: a version that is live and not `private` can never be
+redeployed, so the change has to be a bump. A `private` one is reported and not
+failed, because editing it in place is the only route it has. A version the
+chain does not have is the common case and says nothing. `args` takes anything
 else as one string (`args: verify -deployed`), `working-directory` moves it, and
 `version` overrides what is installed, which otherwise is the tag you called the
 action at. Pin the tag: the action installs the gnopm that matches it, so a green

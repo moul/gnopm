@@ -192,30 +192,55 @@ func TestEditedInPlaceSeesOnlyWhatReachesAChain(t *testing.T) {
 		t.Errorf("editedInPlace = %v, want %v", got, want)
 	}
 
-	// And the chain decides whether it matters: an unpublished version is
-	// still the version to edit, so it is not a warning.
-	none, err := publishedEdits(edited, func(string) (bool, error) { return false, nil })
-	if err != nil || len(none) != 0 {
-		t.Errorf("unpublished edit should not warn: %v %v", none, err)
-	}
-	hit, err := publishedEdits(edited, func(string) (bool, error) { return true, nil })
-	if err != nil || len(hit) != 1 {
-		t.Fatalf("published edit should warn: %v %v", hit, err)
-	}
-	// The message names the command, because an author who has to look one up
-	// will instead do nothing.
-	if w := editedWarning(hit); !strings.Contains(w, "gnopm bump -if-published p/moul/md") {
-		t.Errorf("warning does not name the fix: %s", w)
+	// And the chain decides what it costs. Three answers, three verdicts, and
+	// the difference between them is the whole point of the check: an absent
+	// version was published to nobody, a `private` one can still be redeployed,
+	// and anything else can never carry this edit at all.
+	for _, tc := range []struct {
+		name         string
+		state        PackageState
+		redeployable bool
+		frozen       int
+		redeploy     int
+	}{
+		{"absent is still the version to edit", StateAbsent, false, 0, 0},
+		{"live and public can never be redeployed", StateLive, false, 1, 0},
+		{"live and private is a redeploy, not a bump", StateLive, true, 0, 1},
+		{"parked bytes cannot be re-sent", StateParked, false, 1, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vs, err := classifyEdits(edited,
+				func(string) (PackageState, error) { return tc.state, nil },
+				func(string) (bool, error) { return tc.redeployable, nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			frozen, redeploy := split(vs)
+			if len(frozen) != tc.frozen || len(redeploy) != tc.redeploy {
+				t.Fatalf("frozen=%d redeploy=%d, want %d and %d", len(frozen), len(redeploy), tc.frozen, tc.redeploy)
+			}
+			// The message names the command, because an author who has to look
+			// one up will instead do nothing.
+			if len(frozen) > 0 && !strings.Contains(frozenEditError(frozen), "gnopm bump -if-published p/moul/md") {
+				t.Errorf("failure does not name the fix: %s", frozenEditError(frozen))
+			}
+			if len(redeploy) > 0 && !strings.Contains(redeployNote(redeploy), "gnopm publish") {
+				t.Errorf("note does not name the fix: %s", redeployNote(redeploy))
+			}
+		})
 	}
 }
 
-// TestCIWarnsButDoesNotFailOnAPublishedEdit: a repository can have a good
-// reason to touch a published version, so this is the one check that reports
-// without turning the build red. Driven against a fake chain, because the test
+// TestCIFailsOnAnEditThatCanNeverReachAChain.
+//
+// This is the regression for moul/gno-contracts#331, which carried exactly this
+// warning, named all five packages, and merged green; three of those paths were
+// still serving the uncapped code five days later. A check that cannot fail is
+// a check nobody has to act on. Driven against a fake chain, because the test
 // suite has no network.
-func TestCIWarnsButDoesNotFailOnAPublishedEdit(t *testing.T) {
+func TestCIFailsOnAnEditThatCanNeverReachAChain(t *testing.T) {
 	f := newFakeChain(t)
-	f.live["gno.land/p/moul/md/v0"] = true
+	f.live["gno.land/p/moul/md/v0"] = true // public: no second addpkg, ever
 
 	root := newRepo(t)
 	addPkg(t, root, "p/moul/md", "gno.land/p/moul/md/v0", "package md\n")
@@ -226,20 +251,83 @@ func TestCIWarnsButDoesNotFailOnAPublishedEdit(t *testing.T) {
 
 	gitCmd(t, root, "checkout", "-q", "-b", "feature")
 	write(t, filepath.Join(root, "p/moul/md/md.gno"), "package md // edited\n")
-	commit(t, root, "edit a live version")
+	commit(t, root, "edit a live public version")
+
+	var out, errw bytes.Buffer
+	err := CI(&Env{Root: root, Out: &out, Errw: &errw},
+		CIOptions{RPC: f.srv.URL, ChainID: "test-1"})
+	if err == nil {
+		t.Fatalf("an edit that can never reach a chain must fail the run:\n%s", out.String())
+	}
+	for _, want := range []string{"❌", publishedEditCheck, "gnopm bump -if-published"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("report is missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+// TestCIReportsButDoesNotFailOnAPrivateEdit is the other half. A `private`
+// package is redeployable at the same path, so editing it in place is the only
+// route it has: the redeploy's cost is worth saying out loud and is not an
+// error.
+func TestCIReportsButDoesNotFailOnAPrivateEdit(t *testing.T) {
+	f := newFakeChain(t)
+	f.live["gno.land/r/moul/crews/v0"] = true
+	f.private["gno.land/r/moul/crews/v0"] = true
+
+	root := newRepo(t)
+	addPkg(t, root, "r/moul/crews", "gno.land/r/moul/crews/v0", "package crews\n")
+	commit(t, root, "seed")
+	mustRun(t, root, "sync")
+	commit(t, root, "lock")
+	gitCmd(t, root, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+	gitCmd(t, root, "checkout", "-q", "-b", "feature")
+	write(t, filepath.Join(root, "r/moul/crews/crews.gno"), "package crews // edited\n")
+	commit(t, root, "edit a live private version")
 
 	var out, errw bytes.Buffer
 	err := CI(&Env{Root: root, Out: &out, Errw: &errw},
 		CIOptions{RPC: f.srv.URL, ChainID: "test-1"})
 	if err != nil {
-		t.Fatalf("a warning must not fail the run: %v\n%s", err, out.String())
+		t.Fatalf("a redeployable edit must not fail the run: %v\n%s", err, out.String())
 	}
-	for _, want := range []string{"⚠️", publishedEditCheck, "gnopm bump -if-published"} {
+	if strings.Contains(out.String(), "❌") {
+		t.Errorf("nothing here is a failure:\n%s", out.String())
+	}
+	for _, want := range []string{"⚠️", redeployNeededCheck, "resets realm state"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("report is missing %q:\n%s", want, out.String())
 		}
 	}
-	if strings.Contains(out.String(), "❌") {
-		t.Errorf("nothing here is a failure:\n%s", out.String())
+}
+
+// TestCIIsSilentOnAnUnpublishedEdit: the common case, and the one the whole
+// check exists to stay out of the way of. Nothing is on the chain, so v0 is
+// still the version to edit and the build is green with nothing to say.
+func TestCIIsSilentOnAnUnpublishedEdit(t *testing.T) {
+	f := newFakeChain(t) // nothing live, nothing parked
+
+	root := newRepo(t)
+	addPkg(t, root, "p/moul/md", "gno.land/p/moul/md/v0", "package md\n")
+	commit(t, root, "seed")
+	mustRun(t, root, "sync")
+	commit(t, root, "lock")
+	gitCmd(t, root, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+	gitCmd(t, root, "checkout", "-q", "-b", "feature")
+	write(t, filepath.Join(root, "p/moul/md/md.gno"), "package md // edited\n")
+	commit(t, root, "edit an unpublished version")
+
+	var out, errw bytes.Buffer
+	if err := CI(&Env{Root: root, Out: &out, Errw: &errw},
+		CIOptions{RPC: f.srv.URL, ChainID: "test-1"}); err != nil {
+		t.Fatalf("an unpublished edit is the normal case: %v\n%s", err, out.String())
+	}
+	if s := out.String(); strings.Contains(s, "❌") || strings.Contains(s, "⚠️") {
+		t.Errorf("nothing to report:\n%s", s)
+	}
+	if !strings.Contains(out.String(), "none frozen on test-1") {
+		t.Errorf("report does not say the chain was asked:\n%s", out.String())
 	}
 }

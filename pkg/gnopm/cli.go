@@ -937,12 +937,21 @@ Runs the checks a repository actually wants in CI and writes a Markdown
 report: that the lock describes the working tree, that every pinned
 version reproduces from history, that no pin would be discarded by a
 squash merge, and that the branch did not edit a version the chain has
-already published. Exits non-zero when one of the first three fails.
+already published.
 
-The published-edit check WARNS rather than fails, because a repository
-can have a fair reason to touch a published version and a red build for
-it teaches people to skip the check. It costs one chain read, and skips
-itself when there is no chain to reach.
+The published-edit check asks the chain what it would actually accept,
+and that decides the verdict:
+
+  absent              v0 was published to nobody, so it is still the
+                      version to edit. Green, and the common case.
+  live and private    a second addpkg at the same path is allowed, so
+                      the edit can reach the chain. Reported, never
+                      fatal, because the redeploy wipes realm state.
+  anything else       no transaction will ever carry this edit. FAILS.
+
+It costs one chain read, cached forever because the private flag
+binds at the first publish, and skips itself when there is no chain to
+reach.
 
 The report goes to stdout and, in GitHub Actions, to the job summary.
 
