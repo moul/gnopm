@@ -808,6 +808,48 @@ address moves. Commit it on its own, so it reviews as a rename list. Context,
 review checklist and the repositories done so far:
 [#3](https://github.com/moul/gnopm/issues/3).
 
+A package that cannot be lifted, because the same path exists both unversioned
+and under a `/vN`, is skipped and reported; the rest of the tree still
+migrates. Two flags for what gnopm cannot work out on its own:
+
+```sh
+gnopm deversion -skip 'quarantined/*'   # a subtree the repository keeps out
+gnopm deversion -keep-superseded        # older versions stay where they sit
+```
+
+`-keep-superseded` is for a repository whose **tree is the distribution**. By
+default the highest version wins the directory and the older ones leave the
+tree, resolvable from the pin and materialized under `.gnopm/`; that is right
+when everything reads the workspace through gnopm, and wrong when test
+harnesses, a genesis loader or a dev node read the directory off disk, because
+each of them loses a version until something materializes it first.
+
+### What a migration cannot move
+
+The code **outside** the workspace that was pointing at those directories: a
+script passing `-pkgdir`, a fixture opening a package, or a function joining
+the workspace directory name with an import path at run time. gnopm knows
+every directory it moved, so it lists them rather than letting CI find them one
+lane at a time:
+
+```
+outside examples/, which this migration does not touch:
+
+  10 file(s) name a directory that moves:
+    misc/gnoe2e/testdata/oracle/serialized_closure.txtar
+    ...
+
+  24 file(s) build a path from "examples", and a path built that way
+  now points at a directory that is gone. Resolve by the module line:
+    gnovm/pkg/test/imports.go
+    ...
+```
+
+The second list is a heuristic and the first is not: a composed path never
+contains the old directory, so nothing can find it by searching for one. Most
+entries in it are fine. The ones that are not are the ones joining that name
+with an import path, and they want the module line instead.
+
 ## As a library
 
 | import | what |

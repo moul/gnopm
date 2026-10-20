@@ -559,7 +559,7 @@ func TestDeversion(t *testing.T) {
 	v0Before := read(t, filepath.Join(root, "p/moul/md/v0/md.gno"))
 	v1Before := read(t, filepath.Join(root, "p/moul/md/v1/md.gno"))
 
-	if err := Deversion(testEnv(root, &bytes.Buffer{}), false); err != nil {
+	if err := Deversion(testEnv(root, &bytes.Buffer{}), DeversionOptions{}); err != nil {
 		t.Fatalf("deversion: %v", err)
 	}
 
@@ -615,12 +615,12 @@ func TestDeversionIsIdempotent(t *testing.T) {
 	root := newRepo(t)
 	addPkg(t, root, "p/moul/md/v0", "gno.land/p/moul/md/v0", "package md\n")
 	commit(t, root, "seed")
-	if err := Deversion(testEnv(root, &bytes.Buffer{}), false); err != nil {
+	if err := Deversion(testEnv(root, &bytes.Buffer{}), DeversionOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	commit(t, root, "de-version")
 	var out bytes.Buffer
-	if err := Deversion(testEnv(root, &out), false); err != nil {
+	if err := Deversion(testEnv(root, &out), DeversionOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "nothing to do") {
@@ -635,7 +635,7 @@ func TestDeversionRefusesAMismatch(t *testing.T) {
 	root := newRepo(t)
 	addPkg(t, root, "p/moul/md/v0", "gno.land/p/moul/md/v1", "package md\n")
 	commit(t, root, "seed")
-	err := Deversion(testEnv(root, &bytes.Buffer{}), true)
+	err := Deversion(testEnv(root, &bytes.Buffer{}), DeversionOptions{DryRun: true})
 	if err == nil || !strings.Contains(err.Error(), "sits in a /v0 directory") {
 		t.Fatalf("expected a mismatch refusal, got %v", err)
 	}
@@ -646,9 +646,135 @@ func TestDeversionRefusesUncommittedWork(t *testing.T) {
 	addPkg(t, root, "p/moul/md/v0", "gno.land/p/moul/md/v0", "package md\n")
 	commit(t, root, "seed")
 	write(t, filepath.Join(root, "p/moul/md/v0/md.gno"), "package md // wip\n")
-	err := Deversion(testEnv(root, &bytes.Buffer{}), false)
+	err := Deversion(testEnv(root, &bytes.Buffer{}), DeversionOptions{})
 	if err == nil || !strings.Contains(err.Error(), "uncommitted") {
 		t.Fatalf("expected a refusal on uncommitted work, got %v", err)
+	}
+}
+
+// TestDeversionSkipsASubtree: -skip leaves a subtree alone, nested packages
+// included, and migrates the rest.
+//
+// The unit tests could not see the need for this: they build the tree the
+// migration wants. A real repository has a corner it keeps out on purpose,
+// and gnolang/gno's examples/quarantined/ is one, holding a versioning
+// tutorial that exists unversioned and under v1/ and v2/ at the same time.
+// Before #92 the only way through was to delete it, migrate, and put it back.
+func TestDeversionSkipsASubtree(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "p/moul/md/v0", "gno.land/p/moul/md/v0", "package md\n")
+	addPkg(t, root, "quarantined/p/x/v0", "gno.land/p/x/v0", "package x\n")
+	addPkg(t, root, "quarantined/deep/p/y/v0", "gno.land/p/y/v0", "package y\n")
+	commit(t, root, "seed")
+
+	var out bytes.Buffer
+	err := Deversion(testEnv(root, &out), DeversionOptions{Skip: []string{"quarantined/*"}})
+	if err != nil {
+		t.Fatalf("deversion: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "p/moul/md/md.gno")); err != nil {
+		t.Fatalf("the package outside the skipped subtree did not migrate: %v", err)
+	}
+	for _, d := range []string{"quarantined/p/x/v0", "quarantined/deep/p/y/v0"} {
+		if _, err := os.Stat(filepath.Join(root, d, "gnomod.toml")); err != nil {
+			t.Errorf("%s was migrated despite -skip: %v", d, err)
+		}
+	}
+	if !strings.Contains(out.String(), "2 skipped") {
+		t.Errorf("the skips are not reported:\n%s", out.String())
+	}
+}
+
+// TestDeversionKeepSuperseded: the older version stays in the tree, locked
+// where it sits, instead of leaving it to the lock and .gnopm/.
+//
+// Existing tests asserted the opposite, which is right when consumers resolve
+// through gnopm and wrong when the tree is itself what they read: in
+// gnolang/gno, genesis, the txtar lanes, gnodev and gnoe2e all load the
+// workspace off disk, and gnolang/gno#6356 had to undo this one removal by
+// hand to keep them working.
+func TestDeversionKeepSuperseded(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "p/moul/md/v0", "gno.land/p/moul/md/v0", "package md\n\nfunc A() {}\n")
+	addPkg(t, root, "p/moul/md/v1", "gno.land/p/moul/md/v1", "package md\n\nfunc A() {}\nfunc B() {}\n")
+	commit(t, root, "seed")
+	v0Before := read(t, filepath.Join(root, "p/moul/md/v0/md.gno"))
+
+	var out bytes.Buffer
+	if err := Deversion(testEnv(root, &out), DeversionOptions{KeepSuperseded: true}); err != nil {
+		t.Fatalf("deversion: %v", err)
+	}
+	// v1 won the directory, and v0 is still there, now nested inside it.
+	if got, _, _ := readGnomod(filepath.Join(root, "p/moul/md/gnomod.toml")); got != "gno.land/p/moul/md/v1" {
+		t.Fatalf("the lifted module is %q", got)
+	}
+	if got := read(t, filepath.Join(root, "p/moul/md/v0/md.gno")); got != v0Before {
+		t.Fatalf("md/v0 did not stay in the tree untouched:\n got: %q\nwant: %q", got, v0Before)
+	}
+	// Locked as an ordinary directory entry: no pin to history, so nothing
+	// has to be materialized before the tree is complete.
+	lock, err := readLock(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, m := range lock.Modules {
+		if m.Module == "gno.land/p/moul/md/v0" {
+			found = true
+			if m.Source.Dir != "p/moul/md/v0" || m.Source.Commit != "" {
+				t.Errorf("md/v0 is locked as %+v, want a plain dir entry", m.Source)
+			}
+		}
+	}
+	if !found {
+		t.Error("md/v0 is not in the lock at all")
+	}
+	if err := Verify(testEnv(root, &bytes.Buffer{})); err != nil {
+		t.Fatalf("verify after migration: %v", err)
+	}
+}
+
+// TestDeversionReportsOutsideReferences: a workspace inside a larger
+// repository, which is what a monorepo is, and the report naming what outside
+// it pointed at a directory that moved.
+//
+// No unit test could see this, because every other one builds a repository
+// whose root is the workspace, where there is no outside. The two shapes are
+// both here on purpose: a file spelling the path out is findable by searching
+// for it, and code composing the path from the workspace directory name is
+// not, which is the shape that broke four CI lanes in gnolang/gno#6356.
+func TestDeversionReportsOutsideReferences(t *testing.T) {
+	top := t.TempDir()
+	gitCmd(t, top, "init", "-q", "-b", "main")
+	gitCmd(t, top, "config", "user.email", "t@example.com")
+	gitCmd(t, top, "config", "user.name", "t")
+	gitCmd(t, top, "config", "commit.gpgsign", "false")
+	root := filepath.Join(top, "examples")
+	write(t, filepath.Join(root, workspaceMarker), "")
+	write(t, filepath.Join(top, ".gitignore"), "/examples/"+assemblyDir+"/\n")
+	addPkg(t, root, "p/moul/md/v0", "gno.land/p/moul/md/v0", "package md\n")
+
+	write(t, filepath.Join(top, "ci", "deploy.sh"),
+		"gnokey maketx addpkg -pkgdir examples/p/moul/md/v0\n")
+	write(t, filepath.Join(top, "tool", "load.go"),
+		"package tool\n\nfunc dir(root, pkgPath string) string {\n"+
+			"\treturn filepath.Join(root, \"examples\", pkgPath)\n}\n")
+	commit(t, top, "seed")
+
+	var out bytes.Buffer
+	if err := Deversion(testEnv(root, &out), DeversionOptions{DryRun: true}); err != nil {
+		t.Fatalf("deversion: %v", err)
+	}
+	report := out.String()
+	if !strings.Contains(report, "ci/deploy.sh") {
+		t.Errorf("the script naming the directory is not reported:\n%s", report)
+	}
+	if !strings.Contains(report, "tool/load.go") {
+		t.Errorf("the code composing the path is not reported:\n%s", report)
+	}
+	// The workspace is not the outside: its own files must not be listed.
+	if strings.Contains(report, "examples/p/moul/md/v0/gnomod.toml") {
+		t.Errorf("a file inside the workspace is in the report:\n%s", report)
 	}
 }
 
@@ -737,7 +863,7 @@ func TestDeversionOnAMixedTree(t *testing.T) {
 	commit(t, root, "rebased branch")
 
 	var out bytes.Buffer
-	if err := Deversion(testEnv(root, &out), false); err != nil {
+	if err := Deversion(testEnv(root, &out), DeversionOptions{}); err != nil {
 		t.Fatalf("deversion: %v\n%s", err, out.String())
 	}
 	if _, err := os.Stat(filepath.Join(root, "p/moul/new/new.gno")); err != nil {
@@ -903,7 +1029,7 @@ func TestDeversionLeavesNoEmptyDirectory(t *testing.T) {
 	write(t, filepath.Join(root, "p/moul/authz/v1/deep/deeper/note.gno"), "package deep\n")
 	commit(t, root, "seed")
 
-	if err := Deversion(testEnv(root, &bytes.Buffer{}), false); err != nil {
+	if err := Deversion(testEnv(root, &bytes.Buffer{}), DeversionOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, gone := range []string{"p/moul/authz/v0", "p/moul/authz/v1"} {
@@ -1374,6 +1500,11 @@ func TestNoPackageErrorNamesTheCommandYouRan(t *testing.T) {
 // deversion on gnolang/gno's examples/ (325 packages, 2026-09-28): on a tree
 // that size you cannot even see how big the job is before starting it, which
 // is the difference between a decision and a treadmill.
+//
+// Since #92 reporting them all is not enough: a collision is a skip, not a
+// refusal. The same run found that one ambiguous package stopped all 104
+// moves on that tree, and the package in question was a versioning tutorial
+// in a directory the migration was not supposed to touch at all.
 func TestDeversionReportsEveryCollision(t *testing.T) {
 	root := newRepo(t)
 	for _, n := range []string{"a", "b", "c"} {
@@ -1382,30 +1513,39 @@ func TestDeversionReportsEveryCollision(t *testing.T) {
 		addPkg(t, root, "p/"+n+"/v0", "gno.land/p/"+n+"/v0", "package "+n+"\n")
 		addPkg(t, root, "p/"+n, "gno.land/p/"+n, "package "+n+"\n")
 	}
+	addPkg(t, root, "p/clean/v0", "gno.land/p/clean/v0", "package clean\n")
 	commit(t, root, "initial")
 	mustRun(t, root, "sync")
 
 	var out, errb bytes.Buffer
-	err := Run([]string{"deversion", "-C", root, "-n"}, &out, &errb)
-	if err == nil {
-		t.Fatal("deversion accepted three ambiguous directories")
+	if err := Run([]string{"deversion", "-C", root, "-n"}, &out, &errb); err != nil {
+		t.Fatalf("three ambiguous directories must not stop the plan: %v", err)
 	}
+	report := errb.String()
 	for _, n := range []string{"p/a", "p/b", "p/c"} {
-		if !strings.Contains(err.Error(), n) {
-			t.Errorf("%s is not in the report:\n%v", n, err)
+		if !strings.Contains(report, n) {
+			t.Errorf("%s is not in the report:\n%s", n, report)
 		}
 	}
-	if !strings.Contains(err.Error(), "3 directories") {
-		t.Errorf("the count is missing, so the size of the job is not visible:\n%v", err)
+	// Three skips: only the versioned side of a pair is a candidate to lift,
+	// and the clean package still moves.
+	if !strings.Contains(report, "3 skipped") {
+		t.Errorf("the count is missing, so the size of the job is not visible:\n%s", report)
 	}
-	// Nothing moved: a refusal that had already half-migrated would be worse
-	// than one that reports less.
-	if !strings.Contains(err.Error(), "Nothing has been moved") {
-		t.Errorf("the report does not say the tree is untouched:\n%v", err)
+	if !strings.Contains(report, "mv   p/clean/v0 -> p/clean") {
+		t.Errorf("the migratable package is not in the plan:\n%s", report)
+	}
+
+	// And a real run moves exactly that one.
+	if err := Run([]string{"deversion", "-C", root}, &out, &errb); err != nil {
+		t.Fatalf("deversion: %v", err)
 	}
 	for _, n := range []string{"a", "b", "c"} {
 		if _, err := os.Stat(filepath.Join(root, "p", n, "v0", "gnomod.toml")); err != nil {
-			t.Errorf("p/%s/v0 was moved despite the refusal: %v", n, err)
+			t.Errorf("p/%s/v0 was moved despite being skipped: %v", n, err)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "p", "clean", "gnomod.toml")); err != nil {
+		t.Errorf("p/clean/v0 did not migrate: %v", err)
 	}
 }

@@ -2,6 +2,7 @@ package gnopm
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -32,22 +33,30 @@ import (
 // The module lines are not touched. A realm's address derives from its
 // package path, so rewriting one here would silently change an address; the
 // whole point is that the migration is a pure directory move.
-func Deversion(e *Env, dryRun bool) error {
+//
+// What it cannot do is move the code that was pointing at those directories
+// from outside the workspace, so it reports it instead: see outsideRefs.
+func Deversion(e *Env, opts DeversionOptions) error {
 	root, w := e.Root, e.Errw
 	pkgs, err := scanPackages(root)
 	if err != nil {
 		return err
 	}
-	moves, drops, err := planDeversion(pkgs)
+	moves, drops, skips, err := planDeversion(pkgs, opts)
 	if err != nil {
 		return err
 	}
 	if len(moves) == 0 && len(drops) == 0 {
-		fmt.Fprintln(w, "nothing to do: no package directory carries its version")
+		if len(skips) == 0 {
+			fmt.Fprintln(w, "nothing to do: no package directory carries its version")
+			return nil
+		}
+		writeSkips(w, skips)
+		fmt.Fprintf(w, "\nnothing moves: %d package(s) skipped.\n", len(skips))
 		return nil
 	}
 
-	if dryRun {
+	if opts.DryRun {
 		for _, m := range moves {
 			if m.Replaces != "" {
 				fmt.Fprintf(w, "up   %s -> %s   (%s, replacing the version already there)\n", m.From, m.To, m.Module)
@@ -58,7 +67,9 @@ func Deversion(e *Env, dryRun bool) error {
 		for _, d := range drops {
 			fmt.Fprintf(w, "rm   %s   (%s, superseded, kept in %s)\n", d.Dir, d.Module, lockFile)
 		}
-		fmt.Fprintf(w, "\n%d package(s) move, %d leave the tree.\n", len(moves), len(drops))
+		writeSkips(w, skips)
+		fmt.Fprintf(w, "\n%d package(s) move, %d leave the tree%s.\n", len(moves), len(drops), skipSuffix(skips))
+		reportOutsideRefs(w, root, moves, drops)
 		return nil
 	}
 
@@ -152,7 +163,8 @@ func Deversion(e *Env, dryRun bool) error {
 			return err
 		}
 	}
-	fmt.Fprintf(w, "moved %d package(s), removed %d superseded version(s)\n", len(moves), len(drops))
+	fmt.Fprintf(w, "moved %d package(s), removed %d superseded version(s)%s\n", len(moves), len(drops), skipSuffix(skips))
+	writeSkips(w, skips)
 
 	// Step 3: re-lock against the new layout.
 	pkgs, err = scanPackages(root)
@@ -168,8 +180,80 @@ func Deversion(e *Env, dryRun bool) error {
 	}
 	fmt.Fprintf(w, "%s: %d modules (%d in tree, %d pinned to history)\n",
 		lockFile, len(relocked.Modules), len(pkgs), len(relocked.Modules)-len(pkgs))
+	reportOutsideRefs(w, root, moves, drops)
 	fmt.Fprintf(w, "\nnext: `make lint test`, then commit the move on its own.\n")
 	return nil
+}
+
+// DeversionOptions are what a migration can be told that it cannot work out.
+// The zero value is the migration, and every field exists because a real
+// repository needed it: see the comment on each.
+type DeversionOptions struct {
+	// DryRun prints the plan and changes nothing.
+	DryRun bool
+	// Skip excludes a package whose directory, relative to the workspace
+	// root, matches one of these path.Match globs. For the subtree a
+	// repository keeps out of a migration on purpose: gnolang/gno holds a
+	// versioning tutorial under examples/quarantined/ that exists
+	// unversioned and under v1/ and v2/ at once, which is not a layout to
+	// fix but a thing being taught.
+	Skip []string
+	// KeepSuperseded leaves an older version in the directory it already
+	// occupies instead of taking it out of the tree.
+	//
+	// The default is right when consumers resolve through gnopm, and wrong
+	// when the tree is itself the distribution: in gnolang/gno, genesis
+	// loading, the txtar lanes, gnodev and gnoe2e all read the workspace off
+	// disk, so a version that lives only in the lock is a version each of
+	// them loses until something materializes it first.
+	//
+	// Deliberately not offered on bump: keeping the superseded version there
+	// would mean copying a directory and editing the module line of the
+	// copy, which is the copy git cannot pair, which is what gnopm exists to
+	// remove. deversion is different because the version is already in the
+	// tree and the migration is what takes it out.
+	KeepSuperseded bool
+}
+
+// skip is a package the plan leaves exactly where it is, and why. A skip is
+// never an error: the migration moves what it can and says what it did not.
+type skip struct {
+	Dir, Why string
+	// Group collapses the report to one line. An excluded subtree is a
+	// decision the caller already made and does not need read back: on
+	// gnolang/gno, -skip quarantined/* covers 174 packages, and printing all
+	// of them buries the one skip that is news.
+	Group string
+}
+
+func writeSkips(w io.Writer, skips []skip) {
+	counts := map[string]int{}
+	var groups []string
+	for _, s := range skips {
+		if s.Group == "" {
+			continue
+		}
+		if counts[s.Group] == 0 {
+			groups = append(groups, s.Group)
+		}
+		counts[s.Group]++
+	}
+	sort.Strings(groups)
+	for _, g := range groups {
+		fmt.Fprintf(w, "skip %d package(s)   (%s)\n", counts[g], g)
+	}
+	for _, s := range skips {
+		if s.Group == "" {
+			fmt.Fprintf(w, "skip %s   (%s)\n", s.Dir, s.Why)
+		}
+	}
+}
+
+func skipSuffix(skips []skip) string {
+	if len(skips) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(", %d skipped", len(skips))
 }
 
 type move struct {
@@ -183,7 +267,13 @@ type move struct {
 type drop struct{ Dir, Module string }
 
 // planDeversion decides what moves where, and refuses rather than guesses.
-func planDeversion(pkgs []Package) ([]move, []drop, error) {
+//
+// Refusing is per package, not per run: a directory that cannot be lifted is
+// reported and left alone, and the rest of the tree still migrates. The whole
+// plan used to fail instead, which on gnolang/gno meant one tutorial package
+// in a directory the migration was not even supposed to touch stopped all 104
+// moves, with no way to scope it out.
+func planDeversion(pkgs []Package, opts DeversionOptions) ([]move, []drop, []skip, error) {
 	// Group packages by the directory they would end up in.
 	type cand struct {
 		pkg Package
@@ -196,7 +286,12 @@ func planDeversion(pkgs []Package) ([]move, []drop, error) {
 	}
 	var moves []move
 	var drops []drop
+	var skips []skip
 	for _, p := range pkgs {
+		if g, ok := matchAny(opts.Skip, p.Dir); ok {
+			skips = append(skips, skip{Dir: p.Dir, Why: "excluded by -skip " + g, Group: "excluded by -skip " + g})
+			continue
+		}
 		_, n, ok := splitVersion(p.Module)
 		if !ok {
 			// No trailing /vN in the module path: nothing to de-version, and
@@ -208,8 +303,8 @@ func planDeversion(pkgs []Package) ([]move, []drop, error) {
 			continue // already de-versioned
 		}
 		if dirN != n {
-			return nil, nil, fmt.Errorf("%s declares %s but sits in a /v%d directory - "+
-				"fix the mismatch by hand before migrating", p.Dir, p.Module, dirN)
+			return nil, nil, nil, fmt.Errorf("%s declares %s but sits in a /v%d directory - "+
+				"fix the mismatch by hand before migrating, or exclude it with -skip %s", p.Dir, p.Module, dirN, p.Dir)
 		}
 		byTarget[dirBase] = append(byTarget[dirBase], cand{p, n})
 	}
@@ -219,14 +314,6 @@ func planDeversion(pkgs []Package) ([]move, []drop, error) {
 		targets = append(targets, t)
 	}
 	sort.Strings(targets)
-
-	// Collect every collision before reporting any, rather than returning at
-	// the first. Measured on gnolang/gno's examples/ (325 packages,
-	// 2026-09-28): a migration that blocks tells you about one directory at a
-	// time, so you fix it, re-run, and find the next. On a tree that size you
-	// cannot even see how big the job is before starting it, which is the
-	// difference between a decision and a treadmill.
-	var collisions []string
 
 	for _, target := range targets {
 		cands := byTarget[target]
@@ -241,28 +328,49 @@ func planDeversion(pkgs []Package) ([]move, []drop, error) {
 		if cur, ok := atDir[target]; ok {
 			_, curN, curOK := splitVersion(cur.Module)
 			if !curOK || curN >= cands[0].n {
-				collisions = append(collisions, fmt.Sprintf("  %s declares %s, and %s declares %s",
-					target, cur.Module, cands[0].pkg.Dir, cands[0].pkg.Module))
+				// A package that exists both unversioned and under a /vN, so
+				// lifting the versioned one has nowhere to land. Which of the
+				// two is current is the repository's call, not gnopm's, and
+				// sometimes it is neither: the versioning tutorial in
+				// gnolang/gno is unversioned and v1/ and v2/ on purpose.
+				for _, c := range cands {
+					skips = append(skips, skip{Dir: c.pkg.Dir, Why: fmt.Sprintf(
+						"%s already declares %s, so %s has nowhere to land", target, cur.Module, c.pkg.Module)})
+				}
 				continue
 			}
 			m.Replaces = target
 		}
 		moves = append(moves, m)
 		for _, c := range cands[1:] {
+			if opts.KeepSuperseded {
+				skips = append(skips, skip{Dir: c.pkg.Dir, Why: c.pkg.Module + " superseded, kept in the tree by -keep-superseded"})
+				continue
+			}
 			drops = append(drops, drop{Dir: c.pkg.Dir, Module: c.pkg.Module})
 		}
 	}
-	if len(collisions) > 0 {
-		sort.Strings(collisions)
-		return nil, nil, fmt.Errorf("%d director%s would have to hold two packages, and the newer one is not newer:\n%s\n"+
-			"  Each is a package that exists both unversioned and under a /vN, so lifting the\n"+
-			"  versioned one has nowhere to land. Decide which is current, remove the other,\n"+
-			"  and re-run. Nothing has been moved.",
-			len(collisions), plural(len(collisions), "y", "ies"), strings.Join(collisions, "\n"))
-	}
 	sort.Slice(moves, func(i, j int) bool { return moves[i].From < moves[j].From })
 	sort.Slice(drops, func(i, j int) bool { return drops[i].Dir < drops[j].Dir })
-	return moves, drops, nil
+	sort.Slice(skips, func(i, j int) bool { return skips[i].Dir < skips[j].Dir })
+	return moves, drops, skips, nil
+}
+
+// matchAny reports which glob matches dir, testing the whole path and every
+// parent of it: -skip 'quarantined/*' is meant to exclude the subtree, and a
+// glob that only matched its direct children would be a trap.
+func matchAny(globs []string, dir string) (string, bool) {
+	for _, g := range globs {
+		for d := dir; ; d = path.Dir(d) {
+			if ok, err := path.Match(g, d); err == nil && ok {
+				return g, true
+			}
+			if d == "." || d == "/" || !strings.Contains(d, "/") {
+				break
+			}
+		}
+	}
+	return "", false
 }
 
 // checkCollisions proves that no file a move produces lands on a path that

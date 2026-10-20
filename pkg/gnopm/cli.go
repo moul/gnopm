@@ -1004,9 +1004,24 @@ changes. Idempotent, and only touches directories that still carry a
 version, so a branch opened before the migration can rebase and re-run
 it to fix up just its own packages.
 
-  -n   print the plan and change nothing`,
+A package it cannot lift is reported and left where it is, and the rest
+of the tree still migrates. It also reports what, outside the workspace,
+named a directory that moved: the migration cannot fix a script or a
+test that spells out a path, and the one thing worse than that list is
+not having it.
+
+  -n                print the plan and change nothing
+  -skip <globs>     comma-separated, matched against the package
+                    directory and every parent of it, for a subtree the
+                    repository keeps out of the migration
+  -keep-superseded  leave an older version in the directory it already
+                    occupies, for a tree that is itself what consumers
+                    read, instead of taking it out and leaving it to the
+                    lock`,
 			flags: func(fs *flag.FlagSet) {
 				fs.Bool("n", false, "print the plan and change nothing")
+				fs.String("skip", "", "comma-separated globs of package directories to leave alone")
+				fs.Bool("keep-superseded", false, "keep superseded versions in the tree")
 			},
 			run: cmdDeversion,
 		},

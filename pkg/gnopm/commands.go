@@ -255,13 +255,30 @@ func cmdBump(e *Env, fs *flag.FlagSet, args []string) error {
 }
 
 func cmdDeversion(e *Env, fs *flag.FlagSet, args []string) error {
-	if err := Deversion(e, flagBool(fs, "n")); err != nil {
+	opts := DeversionOptions{
+		DryRun:         flagBool(fs, "n"),
+		Skip:           splitList(flagString(fs, "skip")),
+		KeepSuperseded: flagBool(fs, "keep-superseded"),
+	}
+	if err := Deversion(e, opts); err != nil {
 		return err
 	}
-	if flagBool(fs, "n") {
+	if opts.DryRun {
 		return nil
 	}
 	return Install(e)
+}
+
+// splitList reads a comma-separated flag value. Repeating a flag would need a
+// flag.Value and gnopm has none; a glob with a comma in it is not a thing.
+func splitList(s string) []string {
+	var res []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			res = append(res, p)
+		}
+	}
+	return res
 }
 
 func (e *Env) writeJSON(v any) error {
