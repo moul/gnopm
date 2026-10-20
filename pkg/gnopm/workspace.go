@@ -51,10 +51,32 @@ func skipScan(base, p, name string) bool {
 	if strings.HasPrefix(name, ".") {
 		return true
 	}
+	if isNestedRepo(p) {
+		return true
+	}
 	if name == vendorDir {
 		return filepath.Dir(p) == base
 	}
 	return skipDirs[name]
+}
+
+// isNestedRepo reports whether dir is the root of another git repository: a
+// submodule's working tree, or a clone somebody left inside the workspace.
+//
+// Its packages belong to that repository, and only that repository can lock
+// them. From here their source is a gitlink: `git archive` cannot read a file
+// that the outer repository does not hold, so a freeze over them fails
+// outright, and a { dir } entry pointing inside one is stale in every clone
+// that did not recurse. Both were real on samouraiworld/gnoland-packages,
+// where deversion could not run at all (#95).
+//
+// A submodule checkout carries a .git FILE and a plain clone a .git
+// directory, so one Lstat answers it without git being installed, without the
+// submodule being initialized, and without reading .gitmodules, which an
+// uncommitted clone would not have.
+func isNestedRepo(dir string) bool {
+	_, err := os.Lstat(filepath.Join(dir, ".git"))
+	return err == nil
 }
 
 // Package is one buildable gno package found in the working tree.

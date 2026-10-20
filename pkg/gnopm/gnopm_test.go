@@ -778,6 +778,69 @@ func TestDeversionReportsOutsideReferences(t *testing.T) {
 	}
 }
 
+// TestWorkspaceSkipsANestedRepository: a submodule's packages are not this
+// workspace's to lock, and trying anyway breaks the migration outright.
+//
+// Found on samouraiworld/gnoland-packages, which keeps a package repository
+// as a submodule under a gnowork.toml at the root (#95). deversion froze the
+// submodule's packages along with its own and died on
+// `git archive <HEAD>: path 'gnodaokit/gno/p/basedao' does not match any
+// files`, because from the outer repository that path is a gitlink and not
+// files. Short of that it still wrote { dir } entries pointing inside the
+// submodule, which are stale in every clone that did not recurse.
+//
+// No existing test could see it: they all build a single repository, and a
+// gitlink only exists where one repository contains another.
+func TestWorkspaceSkipsANestedRepository(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "p/mine/v0", "gno.land/p/mine/v0", "package mine\n")
+
+	sub := filepath.Join(root, "theirs")
+	require := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	require(os.MkdirAll(sub, 0o755))
+	gitCmd(t, sub, "init", "-q", "-b", "main")
+	gitCmd(t, sub, "config", "user.email", "t@example.com")
+	gitCmd(t, sub, "config", "user.name", "t")
+	gitCmd(t, sub, "config", "commit.gpgsign", "false")
+	addPkg(t, sub, "p/theirs/v0", "gno.land/p/theirs/v0", "package theirs\n")
+	gitCmd(t, sub, "add", "-A")
+	gitCmd(t, sub, "commit", "-q", "-m", "theirs")
+	commit(t, root, "seed")
+
+	pkgs, err := scanPackages(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pkgs) != 1 || pkgs[0].Module != "gno.land/p/mine/v0" {
+		t.Fatalf("the scan took in the nested repository: %+v", pkgs)
+	}
+
+	var out bytes.Buffer
+	if err := Deversion(testEnv(root, &out), DeversionOptions{}); err != nil {
+		t.Fatalf("deversion over a workspace holding a nested repository: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "p/mine/mine.gno")); err != nil {
+		t.Fatalf("the workspace's own package did not migrate: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(sub, "p/theirs/v0/gnomod.toml")); err != nil {
+		t.Errorf("the nested repository was migrated: %v", err)
+	}
+	lock, err := readLock(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range lock.Modules {
+		if strings.HasPrefix(m.Source.Dir, "theirs/") {
+			t.Errorf("the lock points inside the nested repository: %+v", m)
+		}
+	}
+}
+
 func gitOut(root string, args ...string) (string, error) { return git(root, args...) }
 
 // TestPinSurvivesASquashMerge is the reason choosePin exists.

@@ -679,6 +679,12 @@ old one resolvable. It changes only on add, remove or bump. Named after the
 manifest rather than the tool, at the workspace root only, as every ecosystem
 does it.
 
+It describes **this** repository. A directory with its own `.git`, a submodule
+or a clone left in the tree, is another repository's, and its packages are
+skipped: from here their source is a gitlink rather than files, so a pin could
+not reproduce them and a `{ dir }` entry pointing inside one is stale in every
+clone that did not recurse.
+
 ### Is what is deployed what is committed?
 
 ```sh
