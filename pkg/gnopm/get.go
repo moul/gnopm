@@ -23,7 +23,7 @@ func Get(e *Env, targets []string, rpc, chainID string) error {
 	if err != nil {
 		return err
 	}
-	pkgs, err := scanPackages(e.Root)
+	pkgs, err := scanResolvable(e.Root)
 	if err != nil {
 		return err
 	}

@@ -20,10 +20,11 @@ func Status(e *Env) error {
 	if err != nil {
 		return err
 	}
-	pkgs, err := scanPackages(e.Root)
+	all, err := scanResolvable(e.Root)
 	if err != nil {
 		return err
 	}
+	pkgs := ownPackages(all)
 	pinned := materializedEntries(lock)
 
 	lockOK, lockWhy := lockState(lock, pkgs)
@@ -62,13 +63,19 @@ func Status(e *Env) error {
 	e.printf("assembly     %s\n", asmWhy)
 	if !lockOK || !asmOK {
 		// sync repairs an orphaned entry now, by pinning the vanished version
-		// to the commit that still holds it, so "run `gnopm sync`" is honest
-		// advice again. Name what it will do, because rewriting a lock entry
-		// is a bigger thing than the word "sync" suggests.
-		for _, o := range findOrphans(lock, pkgs) {
-			e.printf("\n%s has no directory left. `gnopm sync` pins it to the commit that still holds it.\n",
-				o.Entry.Module)
-			break
+		// to the commit that still holds it, or dropping one git ignores, so
+		// "run `gnopm sync`" is honest advice again. Name what it will do,
+		// because rewriting a lock entry is a bigger thing than the word
+		// "sync" suggests.
+		if orphans := findOrphans(lock, pkgs); len(orphans) > 0 {
+			o := orphans[0]
+			if ignoredEntry(e.Root, o.Entry, all) {
+				e.printf("\n%s is in a directory git ignores. `gnopm sync` drops it from the lock.\n",
+					o.Entry.Module)
+			} else {
+				e.printf("\n%s has no directory left. `gnopm sync` pins it to the commit that still holds it.\n",
+					o.Entry.Module)
+			}
 		}
 		e.printf("\nrun `gnopm sync`\n")
 	}
@@ -174,18 +181,31 @@ func cmdLs(e *Env, fs *flag.FlagSet, args []string) error {
 // Everything else is a special case of this, which is why it is the command
 // a Makefile prerequisite or a shell hook should call. Quiet when there is
 // nothing to do, so running it too often costs nothing.
+//
+// It scans once for both halves: neither writes anything the scan reads, and
+// the walk with its git call is most of what a no-op sync costs.
 func Sync(e *Env) error {
-	if err := Relock(e); err != nil {
-		return err
-	}
-	return Install(e)
-}
-
-func Relock(e *Env) error {
-	pkgs, err := scanPackages(e.Root)
+	all, err := scanResolvable(e.Root)
 	if err != nil {
 		return err
 	}
+	if err := relock(e, all); err != nil {
+		return err
+	}
+	return install(e, all)
+}
+
+func Relock(e *Env) error {
+	all, err := scanResolvable(e.Root)
+	if err != nil {
+		return err
+	}
+	return relock(e, all)
+}
+
+// relock is Relock over a scan the caller already made.
+func relock(e *Env, all []Package) error {
+	pkgs := ownPackages(all)
 	old, err := readLock(e.Root)
 	if err != nil {
 		return err
@@ -194,6 +214,7 @@ func Relock(e *Env) error {
 	if err != nil {
 		return err
 	}
+	dropIgnored(e.Root, next, all, e.Errw)
 	// A version taken out of the working tree still has its source in git, so
 	// pin it there rather than carrying an entry that points at a directory
 	// holding somebody else's code. Costs nothing when there is no orphan,

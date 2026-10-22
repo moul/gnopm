@@ -30,7 +30,7 @@ func importGraph(root string) (map[string][]string, error) {
 		}
 		set[from][to] = true
 	}
-	pkgs, err := scanPackages(root)
+	pkgs, err := scanResolvable(root)
 	if err != nil {
 		return nil, err
 	}

@@ -29,11 +29,7 @@ import (
 // to decide for itself is opt-in, and costs a chain read: see IfPublished.
 func Bump(e *Env, target string, opts BumpOptions) error {
 	root, w := e.Root, e.Errw
-	pkgs, err := scanPackages(root)
-	if err != nil {
-		return err
-	}
-	pkg, err := findTarget(pkgs, target)
+	pkg, err := findOwnTarget(root, target, "bump")
 	if err != nil {
 		return err
 	}
@@ -129,6 +125,24 @@ func Bump(e *Env, target string, opts BumpOptions) error {
 		pkg.Dir, pkg.Module, nextModule, filepath.Join(pkg.Dir, "gnomod.toml"), lockFile, cur, where)
 	fmt.Fprintf(w, "\nnow edit %s in place. Importers of %s still resolve.\n", pkg.Dir, pkg.Module)
 	return nil
+}
+
+// findOwnTarget is findTarget over this repository's packages. A target that
+// names a package git ignores is refused by name rather than reported missing,
+// because it is on disk and gno resolves it.
+func findOwnTarget(root, target, verb string) (Package, error) {
+	all, err := scanResolvable(root)
+	if err != nil {
+		return Package{}, err
+	}
+	pkg, err := findTarget(ownPackages(all), target)
+	if err != nil {
+		if p, e := findTarget(all, target); e == nil && p.GitIgnored {
+			return Package{}, fmt.Errorf("%s is in a directory git ignores, so it is not this repository's to %s", p.Dir, verb)
+		}
+		return Package{}, err
+	}
+	return pkg, nil
 }
 
 // findTarget accepts either a directory or a module path, because both are

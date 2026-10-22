@@ -74,6 +74,33 @@ func gitDirty(root string, paths ...string) ([]string, error) {
 	return out, nil
 }
 
+// gitIgnored lists what git ignores under root and does not track, as
+// root-relative slash paths. A directory ignored whole is one entry with a
+// trailing slash; a directory that also holds a tracked file is listed file by
+// file instead, so the tracked package in it still counts as this
+// repository's.
+//
+// A package in an ignored directory is in no clone: a Makefile's copy of
+// another repository's package, a build output. Locking it writes a { dir }
+// entry that sync cannot satisfy anywhere else.
+//
+// Nil when git cannot answer: outside a repository, without git on PATH, or
+// with a .git that git refuses. The rules are git's alone, and reimplementing
+// them would make the lock depend on which reading of them ran.
+func gitIgnored(root string) map[string]bool {
+	s, err := git(root, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory")
+	if err != nil {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, p := range strings.Split(s, "\x00") {
+		if p != "" {
+			out[p] = true
+		}
+	}
+	return out
+}
+
 // gitTrackedIn lists the git-tracked files under a working-tree directory,
 // as paths relative to that directory.
 func gitTrackedIn(root, dir string) ([]string, error) {

@@ -93,7 +93,7 @@ nobody dares change.
 |---|---|---|
 | `payloadFiles` in `publish.go`: which files a deploy uploads, `filetests/` fold-in included | `ReadMemPackage` with `MPUserAll`, `gnovm/pkg/gnolang/mempackage.go` | 2026-09-22 |
 | `TxDocument` in `publishtx.go`: the unsigned transaction shape | `std.Tx` / `vm.MsgAddPackage`, plus the signed-and-broadcast fixture `gno.land/pkg/integration/testdata/addpkg_multi_msg.txtar` | 2026-09-22 |
-| `scanPackages` / `readGnomod` in `workspace.go`: finding packages and their module line | `gno list`, `gnovm/cmd/gno/list.go` | 2026-09-19 |
+| `scanResolvable` / `readGnomod` in `workspace.go`: finding packages and their module line | `gno list`, `gnovm/cmd/gno/list.go` | 2026-10-22 |
 | `-f` in `format.go`: the go-template flag | `gno list -f`, same file | 2026-09-22 |
 | `isProdGno` in `edited.go`: which files the VM runs | the `_test.gno` / `_filetest.gno` split, `mempackage.go` | 2026-09-22 |
 | `AddPackageFor` in `publishtx.go`: the message's files in byte order | `MemPackage.ValidateBasic`'s `unsorted files` check and `Sort`, `tm2/pkg/std/memfile.go` | 2026-10-02 |

@@ -335,7 +335,7 @@ func tidyFetch(e *Env, opts TidyOptions) error {
 	if err != nil {
 		return err
 	}
-	pkgs, err := scanPackages(e.Root)
+	pkgs, err := scanResolvable(e.Root)
 	if err != nil {
 		return err
 	}

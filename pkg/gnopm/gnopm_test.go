@@ -841,6 +841,249 @@ func TestWorkspaceSkipsANestedRepository(t *testing.T) {
 	}
 }
 
+// TestWorkspaceSkipsAGitignoredDirectory: a package under a directory git
+// ignores is not this repository's to lock, while a package git tracks there
+// anyway still is.
+//
+// Found on a workspace whose Makefile copies another repository's realm into
+// an ignored deps/, so that local tests resolve its import. sync wrote a
+// { dir } entry pointing into deps/, which no clone has, and sync in a clone
+// without the copy then failed on a version that left the tree and exists on
+// no commit. No existing test could see it: none of them ignores a directory
+// that holds a package.
+func TestWorkspaceSkipsAGitignoredDirectory(t *testing.T) {
+	root := newRepo(t)
+	write(t, filepath.Join(root, ".gitignore"), "/"+assemblyDir+"/\n/deps/\n")
+	addPkg(t, root, "p/mine/v0", "gno.land/p/mine/v0", "package mine\n")
+	addPkg(t, root, "deps/theirs/v0", "gno.land/r/theirs/v0", "package theirs\n")
+	addPkg(t, root, "deps/forced/v0", "gno.land/p/forced/v0", "package forced\n")
+	gitCmd(t, root, "add", "-f", "deps/forced/v0")
+	// git lists this directory file by file, since it holds a tracked file, so
+	// the ignored gnomod.toml has to be caught on its own.
+	addPkg(t, root, "deps/half/v0", "gno.land/p/half/v0", "package half\n")
+	gitCmd(t, root, "add", "-f", "deps/half/v0/half.gno")
+	commit(t, root, "seed")
+
+	mustRun(t, root, "sync")
+	locked := mustByModule(t, root)
+	for _, m := range []string{"gno.land/r/theirs/v0", "gno.land/p/half/v0"} {
+		if e, ok := locked[m]; ok {
+			t.Errorf("the lock holds a package git ignores: %+v", e)
+		}
+	}
+	for _, m := range []string{"gno.land/p/mine/v0", "gno.land/p/forced/v0"} {
+		if _, ok := locked[m]; !ok {
+			t.Errorf("the lock is missing %s, which git tracks", m)
+		}
+	}
+
+	// A clone has no copy of the ignored directory.
+	if err := os.RemoveAll(filepath.Join(root, "deps/theirs")); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, root, "sync")
+}
+
+// TestSyncAsksGitOnceForWhatItIgnores: sync walks the tree once and asks git
+// for the ignore rules once, though it both relocks and installs.
+//
+// Relock and Install each scan for themselves, so sync built on the two would
+// pay for the walk, and for the git process behind the ignore rules, twice: it
+// is the command a Makefile runs before every build. Only a git on PATH that
+// logs its arguments can see it, since the result is the same either way.
+func TestSyncAsksGitOnceForWhatItIgnores(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "p/mine/v0", "gno.land/p/mine/v0", "package mine\n")
+	commit(t, root, "seed")
+
+	real, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin, log := t.TempDir(), filepath.Join(t.TempDir(), "git.log")
+	write(t, filepath.Join(bin, "git"), "#!/bin/sh\necho \"$*\" >> '"+log+"'\nexec '"+real+"' \"$@\"\n")
+	if err := os.Chmod(filepath.Join(bin, "git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	mustRun(t, root, "sync")
+	if n := strings.Count(read(t, log), "--ignored"); n != 1 {
+		t.Errorf("sync asked git for the ignore rules %d times, want once:\n%s", n, read(t, log))
+	}
+}
+
+// TestIgnoreRulesGitCannotAnswer: when git cannot say what is ignored,
+// nothing is, the way ensureIgnored treats the same failure, and sync still
+// works.
+//
+// Treating git's failure as an error would fail every command that scans, in
+// a checkout without git on PATH or with a .git file pointing at a repository
+// that is gone. No other test runs where git cannot answer.
+func TestIgnoreRulesGitCannotAnswer(t *testing.T) {
+	seed := func(t *testing.T, root string) {
+		write(t, filepath.Join(root, ".gitignore"), "/"+assemblyDir+"/\n/deps/\n")
+		addPkg(t, root, "p/mine/v0", "gno.land/p/mine/v0", "package mine\n")
+		addPkg(t, root, "deps/theirs/v0", "gno.land/r/theirs/v0", "package theirs\n")
+	}
+	for name, setup := range map[string]func(t *testing.T) string{
+		"no git on PATH": func(t *testing.T) string {
+			root := newRepo(t)
+			seed(t, root)
+			commit(t, root, "seed")
+			t.Setenv("PATH", t.TempDir())
+			return root
+		},
+		"a .git file pointing at nothing": func(t *testing.T) string {
+			root := t.TempDir()
+			write(t, filepath.Join(root, workspaceMarker), "")
+			write(t, filepath.Join(root, ".git"), "gitdir: "+filepath.Join(root, "gone")+"\n")
+			seed(t, root)
+			return root
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := setup(t)
+			mustRun(t, root, "sync")
+			locked := mustByModule(t, root)
+			for _, m := range []string{"gno.land/p/mine/v0", "gno.land/r/theirs/v0"} {
+				if _, ok := locked[m]; !ok {
+					t.Errorf("the lock is missing %s; with nothing ignored it holds every package", m)
+				}
+			}
+		})
+	}
+}
+
+// TestSyncDropsAnEntryGitNowIgnores: a lock that names a package in an
+// ignored directory heals on the next sync instead of refusing, with the copy
+// on disk or, as in a clone, without it.
+//
+// A lock v0.19.0 wrote holds such a { dir } entry. Leaving the package out of
+// the scan alone would make sync treat the entry as an orphan and pin it to
+// history: refusing where the directory was never committed, and pinning an
+// old commit where it once was. In a clone without the copy, v0.19.0's own
+// sync already refuses. The tests above all start from no lock.
+func TestSyncDropsAnEntryGitNowIgnores(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		committed, clone bool
+	}{
+		{name: "never committed"},
+		{name: "committed once", committed: true},
+		{name: "a clone without the copy", clone: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := newRepo(t)
+			addPkg(t, root, "p/mine/v0", "gno.land/p/mine/v0", "package mine\n")
+			if tc.committed {
+				addPkg(t, root, "deps/theirs/v0", "gno.land/r/theirs/v0", "package theirs\n")
+			}
+			commit(t, root, "seed")
+			if !tc.committed {
+				addPkg(t, root, "deps/theirs/v0", "gno.land/r/theirs/v0", "package theirs\n")
+			}
+			mustRun(t, root, "sync")
+			if _, ok := mustByModule(t, root)["gno.land/r/theirs/v0"]; !ok {
+				t.Fatal("setup: the lock does not name the package yet")
+			}
+			if tc.committed {
+				gitCmd(t, root, "rm", "-r", "-q", "--cached", "deps")
+			}
+			write(t, filepath.Join(root, ".gitignore"), "/"+assemblyDir+"/\n/deps/\n")
+			commit(t, root, "ignore deps")
+			if tc.clone {
+				clone := filepath.Join(t.TempDir(), "clone")
+				gitCmd(t, filepath.Dir(clone), "clone", "-q", root, clone)
+				root = clone
+			}
+
+			if out := mustRun(t, root, "status"); !strings.Contains(out, "git ignores") || strings.Contains(out, "pins it") {
+				t.Errorf("status does not say sync drops the entry of an ignored package:\n%s", out)
+			}
+			out := mustRun(t, root, "sync")
+			if e, ok := mustByModule(t, root)["gno.land/r/theirs/v0"]; ok {
+				t.Errorf("sync kept the entry of a package git ignores: %+v", e)
+			}
+			if !strings.Contains(out, "gno.land/r/theirs/v0") {
+				t.Errorf("sync dropped the entry without saying so:\n%s", out)
+			}
+			mustRun(t, root, "verify")
+		})
+	}
+}
+
+// TestIgnoredCopiesStillResolve: a package git ignores stays out of the lock
+// but not out of sight, because gno still resolves it from the working tree.
+//
+// Leaving it out of every scan would hide it from the checks that ask what
+// gno resolves: two packages declaring one module would pass, get would fetch
+// a second copy of it, why would miss its imports, and install would
+// materialize a pinned version beside it. Each case below is one of those
+// checks. bump, which acts on this repository's packages, refuses it by name.
+func TestIgnoredCopiesStillResolve(t *testing.T) {
+	ignoring := func(t *testing.T) string {
+		root := newRepo(t)
+		write(t, filepath.Join(root, ".gitignore"), "/"+assemblyDir+"/\n/deps/\n")
+		addPkg(t, root, "p/mine/v0", "gno.land/p/mine/v0", "package mine\n")
+		return root
+	}
+	refuses := func(t *testing.T, root, want string, args ...string) {
+		t.Helper()
+		var out, errw bytes.Buffer
+		err := Run(append([]string{args[0], "-C", root}, args[1:]...), &out, &errw)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("gnopm %s: got %v, want an error naming %q\n%s", strings.Join(args, " "), err, want, errw.String())
+		}
+	}
+
+	t.Run("two packages declare one module", func(t *testing.T) {
+		root := ignoring(t)
+		addPkg(t, root, "r/theirs/v0", "gno.land/r/theirs/v0", "package theirs\n")
+		addPkg(t, root, "deps/theirs/v0", "gno.land/r/theirs/v0", "package theirs\n")
+		commit(t, root, "seed")
+		refuses(t, root, "two packages declare module", "status")
+	})
+
+	t.Run("get refuses what the tree already has", func(t *testing.T) {
+		root := ignoring(t)
+		addPkg(t, root, "deps/theirs/v0", "gno.land/r/theirs/v0", "package theirs\n")
+		commit(t, root, "seed")
+		mustRun(t, root, "sync")
+		refuses(t, root, "deps/theirs/v0", "get", "gno.land/r/theirs/v0", "-rpc", "http://127.0.0.1:1", "-chainid", "test")
+	})
+
+	t.Run("why counts an ignored importer", func(t *testing.T) {
+		root := ignoring(t)
+		addPkg(t, root, "deps/theirs/v0", "gno.land/r/theirs/v0",
+			"package theirs\n\nimport \"gno.land/p/mine/v0\"\n\nvar _ = mine.X\n")
+		commit(t, root, "seed")
+		mustRun(t, root, "sync")
+		if out := mustRun(t, root, "why", "gno.land/p/mine/v0"); !strings.Contains(out, "gno.land/r/theirs/v0") {
+			t.Errorf("why does not list the importer in the ignored directory:\n%s", out)
+		}
+	})
+
+	t.Run("install refuses a pinned version the tree also declares", func(t *testing.T) {
+		root := ignoring(t)
+		addPkg(t, root, "p/old", "gno.land/p/old/v0", "package old\n")
+		commit(t, root, "seed")
+		mustRun(t, root, "sync")
+		mustRun(t, root, "bump", "p/old")
+		commit(t, root, "bump")
+		addPkg(t, root, "deps/old/v0", "gno.land/p/old/v0", "package old\n")
+		refuses(t, root, "deps/old/v0, which git ignores", "sync")
+	})
+
+	t.Run("bump refuses a package git ignores by name", func(t *testing.T) {
+		root := ignoring(t)
+		addPkg(t, root, "deps/theirs/v0", "gno.land/r/theirs/v0", "package theirs\n")
+		commit(t, root, "seed")
+		mustRun(t, root, "sync")
+		refuses(t, root, "git ignores", "bump", "deps/theirs/v0")
+	})
+}
+
 func gitOut(root string, args ...string) (string, error) { return git(root, args...) }
 
 // TestPinSurvivesASquashMerge is the reason choosePin exists.

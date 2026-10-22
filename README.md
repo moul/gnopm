@@ -685,6 +685,19 @@ skipped: from here their source is a gitlink rather than files, so a pin could
 not reproduce them and a `{ dir }` entry pointing inside one is stale in every
 clone that did not recurse.
 
+A package in a directory git ignores stays out of the lock for the same
+reason: no clone has it. A copy of another repository's package in an ignored
+`deps/`, there so local tests resolve its import, is not locked, and `sync`
+drops the entry from a lock that already names it, with or without the copy
+on disk. gno still resolves that copy, so wherever the question is what
+resolves, gnopm still sees it: two packages declaring one module are refused,
+`get` will not fetch a second copy, `why` and `tidy` count its imports, and a
+pinned version beside it is refused. Commands that act on this repository's
+own packages, `bump`, `unbump`, `deversion` and `verify`, leave it out, and
+`bump` names it rather than calling it missing. A package git tracks inside an
+ignored directory is locked like any other. When git cannot answer, outside a
+repository or without git on PATH, nothing counts as ignored.
+
 ### Is what is deployed what is committed?
 
 ```sh

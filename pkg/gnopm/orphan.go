@@ -55,6 +55,48 @@ func findOrphans(next *Lock, pkgs []Package) []orphan {
 	return out
 }
 
+// dropIgnored removes, in place in next, the { dir } entry of every package
+// that sits in a directory git ignores, and says which.
+//
+// A lock names one when it was written where git could not answer, or before
+// the directory was ignored, and buildLock carries the entry over. Left there,
+// repinOrphans would pin it to history: refusing when the directory was never
+// committed, and pinning a copy no longer in the tree when it once was.
+func dropIgnored(root string, next *Lock, all []Package, w io.Writer) {
+	kept := next.Modules[:0]
+	for _, e := range next.Modules {
+		if ignoredEntry(root, e, all) {
+			if w != nil {
+				fmt.Fprintf(w, "%s: %s is in a directory git ignores, so it left %s\n", e.Module, e.Source.Dir, lockFile)
+			}
+			continue
+		}
+		kept = append(kept, e)
+	}
+	next.Modules = kept
+}
+
+// ignoredEntry reports whether e is a { dir } entry for a directory git
+// ignores: the package there is ignored, or no package is there, as in a clone
+// that never had the copy, and git ignores the path. Only that second case
+// asks git, so an ordinary sync, where every entry has its package, stays free
+// of it.
+func ignoredEntry(root string, e LockEntry, all []Package) bool {
+	if !e.Source.InTree() {
+		return false
+	}
+	for _, p := range all {
+		if p.Dir == e.Source.Dir {
+			return p.GitIgnored
+		}
+	}
+	// check-ignore exits 1 for a path that is not ignored, and fails outside a
+	// repository or without git: neither is an ignored path. The trailing
+	// slash makes it a directory question whether or not the directory exists.
+	_, err := git(root, "check-ignore", "-q", e.Source.Dir+"/")
+	return err == nil
+}
+
 // repinOrphans rewrites every orphaned entry to the commit that still holds its
 // source, in place in next.
 //
