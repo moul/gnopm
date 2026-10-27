@@ -28,6 +28,9 @@ import (
 func main() {
 	if err := gnopm.Run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "gnopm: "+err.Error())
-		os.Exit(1)
+		// Not always 1: a run that deliberately left work out did publish
+		// the rest, and a caller has to be able to tell that from a run that
+		// signed nothing. See pkg/gnopm/exit.go.
+		os.Exit(gnopm.ExitCode(err))
 	}
 }

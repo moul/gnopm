@@ -295,6 +295,22 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 		e.tracef("chain    republish: compared %d live package(s) in %s\n", len(targets), took(start))
 	}
 
+	// -skip-blocked turns a blocked package from a reason to refuse the whole
+	// run into a package left out of it. Five unpublishable packages stopping
+	// the other 306 from even being PLANNED is a blast radius out of all
+	// proportion to the diagnosis, and a plan costs nothing and signs nothing.
+	//
+	// The diagnosis itself is unchanged and still printed in full, twice: once
+	// on the package's own row and once in a block of its own below, because
+	// quietly dropping work is worse than refusing it.
+	skipBlocked := flagBool(fs, "skip-blocked")
+	if skipBlocked {
+		// After the republish pass, not before, so that a republish target is
+		// judged on what it will actually be: publishes() reads pl.republish,
+		// which only exists once that block has run.
+		markSkipped(plans, deps)
+	}
+
 	// Every message carries the creator as a field, so nothing can be batched
 	// without knowing which address will sign. Resolved here rather than at
 	// the point of use so the header can name it on the same line as the key:
@@ -392,7 +408,7 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	// Skipped when something is going to stop the run anyway: writing
 	// documents for a plan that cannot be signed is work nobody reads.
 	var hd *handoff
-	if out != "" && blockedCount(plans) == 0 && len(mismatched) == 0 && todoCount(plans) > 0 {
+	if out != "" && (skipBlocked || blockedCount(plans) == 0) && len(mismatched) == 0 && todoCount(plans) > 0 {
 		hd, err = buildHandoff(e, plans, deps, creator, out, int64(flagInt(fs, "min-gas")))
 		if err != nil {
 			return err
@@ -404,7 +420,23 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	// report only what the run will act on or what stops it; -v is the full
 	// listing, and it is what to reach for when the question is "why is that
 	// package in the plan at all".
-	todo, blocked, _ := reportPlans(e, plans, domain, hd.txOf(), hd.count())
+	todo, blocked, _ := reportPlans(e, plans, domain, hd.txOf(), hd.count(), skipBlocked)
+
+	// done wraps every success path below, so that a run which left work out
+	// still says so in its exit status. Without this the only signal is on
+	// stderr, and a script cannot tell "published everything" from "published
+	// what it could": the difference is whether anything was signed.
+	done := func(err error) error {
+		if err != nil || blocked == 0 {
+			return err
+		}
+		// Deliberately does not say "the rest were published": under -print
+		// nothing was, and an exit code that lies about what happened is
+		// worse than one that only says what it left out.
+		return &ExitError{Code: ExitPartial, Err: fmt.Errorf(
+			"-skip-blocked left %d of %d package(s) out, named above; the other %d went into the plan",
+			blocked, blocked+todo, todo)}
+	}
 
 	for _, m := range mismatched {
 		e.logf("\n%s%s\n", e.label("PRIVATE"), e.bad(trimDomain(m.module, domain)))
@@ -412,8 +444,12 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	}
 
 	if blocked > 0 {
-		return fmt.Errorf("%d package(s) blocked: a dependency named above is not live, "+
-			"and nothing in this workspace can publish it", blocked)
+		if !skipBlocked {
+			return fmt.Errorf("%d package(s) blocked: a dependency named above is not live, "+
+				"and nothing in this workspace can publish it.\n"+
+				"  Run with -skip-blocked to publish the other %d and leave these out", blocked, todo)
+		}
+		reportSkipped(e, plans, domain)
 	}
 
 	// Refused rather than warned. The flag cannot be corrected on chain, so the
@@ -430,11 +466,11 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 		} else {
 			e.logf("\n%s%s\n", e.label("ok"), e.ok("nothing to publish"))
 		}
-		return nil
+		return done(nil)
 	}
 
 	if hd != nil {
-		return emitHandoff(e, fs, hd, probe, key, creator, haveInert)
+		return done(emitHandoff(e, fs, hd, probe, key, creator, haveInert))
 	}
 	if out == "" && !flagBool(fs, "one-tx-per-package") {
 		// Falling back rather than failing: a publish that works with more
@@ -480,7 +516,7 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 			e.printf("\n# This chain parks submissions: a green broadcast is NOT live.\n")
 			e.printf("# Re-run `gnopm publish` to see whether an approver enabled them.\n")
 		}
-		return nil
+		return done(nil)
 	}
 
 	e.logf("%s%s\n", e.label("sign"), fmt.Sprintf("%d %s prompt(s); %s", len(cmds), gnokeyCmd, e.dim("-print writes the commands out instead")))
@@ -490,7 +526,7 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	if haveInert {
 		e.logf("%s%s\n", e.label("note"), e.warn("this chain parks submissions: a green broadcast is NOT live. Re-run gnopm publish to see whether an approver enabled them."))
 	}
-	return nil
+	return done(nil)
 }
 
 // shellQuote makes a value safe as one single-quoted shell word.
