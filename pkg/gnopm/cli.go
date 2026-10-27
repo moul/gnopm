@@ -598,9 +598,21 @@ An optional pattern filters by substring against the module path or its
 directory, and what it names brings its dependencies with it: a package
 cannot go up before what it imports, so naming one realm plans whatever it
 imports from this workspace too, ahead of it. Only an import that is in
-neither this workspace nor the chain stops the plan. Only packages whose
-source is in the working tree are considered: a version pinned to history
-exists to keep imports resolving.
+neither this workspace nor the chain stops the plan.
+
+A version pinned to this repository's own history publishes exactly like one
+in the working tree: same ordering, same layering, same hash discipline. Its
+bytes come from the assembly gnopm sync materializes, proved against the hash
+in gnomod.lock before anything is sized or signed, and its [source] section
+names the pinned commit rather than HEAD. No pattern selects one on its own,
+because publishing every version this repo ever cut is not what a bare
+"gnopm publish" means; it enters the plan when something being published
+imports it, or when you name it: gnopm publish p/moul/ulist/v0.
+
+A dependency whose source is { chain } is NOT publishable, and that is a
+decision. Its bytes were read back off a chain rather than written here, and
+its path sits in a namespace bound to whoever claimed it first, so the
+add_package would be refused. Vendor it or ask its author to deploy it.
 
 The chain is read in one concurrent batch behind a progress bar on stderr,
 not one blocking query per package.

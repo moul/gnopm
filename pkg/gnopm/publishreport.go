@@ -87,6 +87,12 @@ func reportPlans(e *Env, plans []plan, domain string, txOf map[string]int, txCou
 				continue
 			}
 		}
+		if pl.pinned {
+			// Worth a word on the row: the bytes are not under a directory
+			// the reader can open, and "where did that come from" is the first
+			// question a version with no directory raises.
+			l.tags = append(l.tags, "(pinned to history)")
+		}
 		if pl.dep {
 			// One word, on the row, because the header line already said how
 			// many were pulled in and this is the answer to "which ones".
