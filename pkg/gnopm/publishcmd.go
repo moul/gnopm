@@ -32,6 +32,11 @@ type plan struct {
 	// "" when they are the same. It differs by the [source] section, which
 	// gnopm writes into the uploaded copy only (source.go).
 	gnomod string
+	// pinned marks a package whose source left the working tree and is read
+	// from the assembly, materialized from this repository's history. It
+	// publishes exactly like one in the tree; the flag is for the report and
+	// for the [source] section, which names the pinned commit rather than HEAD.
+	pinned bool
 	// skipped is why an already-live package the pattern selected will NOT be
 	// republished. Reported rather than silent: under -republish, a package
 	// quietly doing nothing is the failure mode worth spending a line on.
@@ -88,37 +93,41 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 		gnokeyCmd = "gnokey"
 	}
 
-	// Only packages whose source is in the working tree can be published: a
-	// version pinned to history exists to keep imports resolving, and
-	// re-uploading one would publish code nobody is looking at. This is also
-	// the set a dependency gets resolved against below.
-	tree := map[string]Package{}
-	var treeOrder []string
-	for _, m := range sortedModules(lock) {
-		if !m.Source.InTree() {
+	// Where each package's bytes are, for everything this repository may put
+	// on a chain: the working tree AND the versions pinned to its own history
+	// and materialized under .gnopm/. See publishsources.go for why those two
+	// and not { chain }. This is also the set a dependency resolves against
+	// below.
+	src := publishSourcesOf(lock)
+	e.tracef("sources  %d publishable module(s): %d in the working tree, %d pinned to history\n",
+		len(src.order), len(src.tree), len(src.pin))
+
+	matched := src.selectBy(pattern)
+	selected := map[string]bool{}
+	var pkgs []string
+	for _, mod := range matched {
+		// A pinned version is proved against the lock's hash before it is
+		// allowed into the plan, so a pattern that names one with a stale
+		// assembly says so here rather than uploading whatever is on disk.
+		if _, ok := src.ours(e.Root, mod); !ok {
+			e.logf("%s%s\n", e.label("skip"), e.warn(mod+": "+src.why[mod]))
 			continue
 		}
-		tree[m.Module] = Package{Dir: m.Source.Dir, Module: m.Module}
-		treeOrder = append(treeOrder, m.Module)
+		selected[mod] = true
+		pkgs = append(pkgs, mod)
 	}
-
-	selected := map[string]bool{}
-	var matched []string
-	for _, mod := range treeOrder {
-		p := tree[mod]
-		if pattern == "" || strings.Contains(p.Module, pattern) || strings.Contains(p.Dir, pattern) {
-			selected[mod] = true
-			matched = append(matched, mod)
-		}
-	}
+	matched = pkgs
 	if len(matched) == 0 {
-		return fmt.Errorf("no package in the working tree matches %q", pattern)
+		if pattern == "" {
+			return fmt.Errorf("this workspace has no publishable package")
+		}
+		return fmt.Errorf("no publishable package matches %q", pattern)
 	}
 	if pattern == "" {
 		e.tracef("select   %d package(s) in the working tree\n", len(matched))
 	} else {
-		e.tracef("select   %d of %d package(s) in the working tree match %q\n",
-			len(matched), len(treeOrder), pattern)
+		e.tracef("select   %d of %d publishable package(s) match %q\n",
+			len(matched), len(src.order), pattern)
 	}
 
 	// Everything derived from "the package path" is derived from what the
@@ -164,7 +173,7 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 		if _, done := deps[mod]; done {
 			continue
 		}
-		imps, err := Imports(e.Root+"/"+tree[mod].Dir, domain)
+		imps, err := Imports(e.Root+"/"+src.pkg[mod].Dir, domain)
 		if err != nil {
 			return err
 		}
@@ -174,7 +183,7 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 				continue
 			}
 			out = append(out, im)
-			if _, ours := tree[im]; ours && !selected[im] {
+			if _, ours := src.ours(e.Root, im); ours && !selected[im] {
 				selected[im] = true
 				pulled[im] = true
 				queue = append(queue, im)
@@ -183,10 +192,10 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 		deps[mod] = out
 	}
 
-	var pkgs []Package
-	for _, mod := range treeOrder {
+	var ours []Package
+	for _, mod := range src.order {
 		if selected[mod] {
-			pkgs = append(pkgs, tree[mod])
+			ours = append(ours, src.pkg[mod])
 		}
 	}
 	edges := 0
@@ -195,7 +204,7 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	}
 	e.tracef("imports  read %d package(s), %d %s-prefixed import(s), %d pulled in as a dependency\n",
 		len(deps), edges, domain, len(pulled))
-	ordered := TopoOrder(pkgs, deps)
+	ordered := TopoOrder(ours, deps)
 
 	inPlan := map[string]bool{}
 	for _, p := range ordered {
@@ -234,7 +243,9 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 			return err
 		}
 		pl := plan{pkg: p, state: state, bytes: n, files: files, dep: pulled[p.Module]}
-		if err := pl.stampSource(e.Root, sources); err != nil {
+		pin, pinned := src.pin[p.Module]
+		pl.pinned = pinned
+		if err := pl.stampSource(e.Root, sources, pinnedAt(pin, pinned)); err != nil {
 			return err
 		}
 		for _, d := range deps[p.Module] {
@@ -254,7 +265,17 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 				// submission, so this one waits.
 				pl.missing = append(pl.missing, depBlock{d, "parked, not live until an approver enables it"})
 			default:
-				pl.missing = append(pl.missing, depBlock{d, "not live, and not in this workspace"})
+				// Say which kind of elsewhere. A module gnopm has never heard
+				// of is somebody's to deploy; one the lock DOES carry, that
+				// this run still cannot publish, has a specific reason and a
+				// command that fixes it, and printing the generic line for it
+				// is what sent the last reader hunting for a version bump
+				// nothing needed (moul/gno-meta#827).
+				why := src.why[d]
+				if why == "" {
+					why = "not live, and not in this workspace"
+				}
+				pl.missing = append(pl.missing, depBlock{d, why})
 			}
 		}
 		plans = append(plans, pl)
@@ -746,7 +767,17 @@ func gnokeyCmdOf(fs *flag.FlagSet) string {
 // The count matters more than it looks: gas and the storage-deposit ceiling are
 // both sized from pl.bytes, so a section added after sizing is a transaction
 // that asks for less than it is charged.
-func (pl *plan) stampSource(root string, r *sourceResolver) error {
+// pinnedAt is the pin to stamp, or nil when the package is in the working tree
+// and git itself is the answer.
+func pinnedAt(en LockEntry, pinned bool) *Source {
+	if !pinned {
+		return nil
+	}
+	s := en.Source
+	return &s
+}
+
+func (pl *plan) stampSource(root string, r *sourceResolver, pin *Source) error {
 	path := filepath.Join(root, filepath.FromSlash(pl.pkg.Dir), "gnomod.toml")
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -756,7 +787,7 @@ func (pl *plan) stampSource(root string, r *sourceResolver) error {
 		return err
 	}
 	disk := string(b)
-	s, err := r.section(pl.pkg.Dir, disk)
+	s, err := r.section(pl.pkg.Dir, disk, pin)
 	if err != nil {
 		return err
 	}

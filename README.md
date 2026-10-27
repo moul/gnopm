@@ -395,7 +395,23 @@ written to anything that is not a terminal.
 
 Naming one package plans its in-tree dependencies too, ahead of it: a dependency
 you could publish yourself is not a missing dependency. Only an import that is in
-neither this workspace nor the chain stops the plan. The chain is read in one
+neither this workspace nor the chain stops the plan.
+
+A dependency pinned to this repository's own history counts as one you could
+publish yourself, and that is the whole point of pinning it. `publish` reads its
+bytes from the assembly `sync` materialized, proves them against the hash in
+`gnomod.lock` before anything is sized or signed, and stamps `[source]` with the
+pinned commit rather than HEAD, because HEAD's copy of that directory is a
+different version by now. No pattern selects a pinned version on its own, since
+publishing every version a repo ever cut is not what a bare `gnopm publish`
+means: it goes up when something being published imports it, or when you name it
+(`gnopm publish p/moul/ulist/v0`). A `{ chain }` dependency is the opposite case
+and stays unpublishable: those bytes were read off somebody else's deploy, into
+a namespace the chain already bound to them. `vendor/` is the line the README
+draws for that code, and it is not yours to bump or publish. History is not
+vendored code.
+
+The chain is read in one
 concurrent batch behind a progress bar, so a hundred packages is a few seconds
 and not a minute (measured against `gnoland-1` on 2026-09-21: 47s down to 6s over
 178 paths).
