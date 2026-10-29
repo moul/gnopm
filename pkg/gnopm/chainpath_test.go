@@ -512,3 +512,53 @@ func TestPublishRecordsWhatItLandedBeforeItStopped(t *testing.T) {
 		t.Error("a package that was never broadcast was recorded as deployed")
 	}
 }
+
+// The record converges whether or not this run had anything to send. A
+// workspace already fully published to a testnet, and a run blocked behind a
+// parked dependency, are the two runs that know the most and used to write the
+// least: both returned before anything was recorded at all.
+func TestPublishRecordsWhatIsLiveWithNothingToSend(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "p/moul/base", "gno.land/p/moul/base/v0", "package base\n")
+	commit(t, root, "seed")
+	mustRun(t, root, "sync")
+
+	f := newFakeChain(t)
+	f.namesEnabled = true
+	f.live["gno.land/p/"+agentAddr+"/base/v0"] = true
+
+	ran, report, err := publishRun(t, root, f, 0, "-addr", agentAddr, "-key", "agent",
+		"-web", "https://onyx.example")
+	if err != nil {
+		t.Fatalf("publish: %v\n%s", err, report)
+	}
+	if len(ran) != 0 {
+		t.Errorf("a run with nothing to publish invoked the client %d time(s)", len(ran))
+	}
+	if !strings.Contains(report, "nothing to publish") {
+		t.Errorf("the run did not report an empty plan:\n%s", report)
+	}
+	d, ok := deployedAt(readFile(t, filepath.Join(root, "p/moul/base/gnomod.toml")), "test-1")
+	if !ok || d.Path != "gno.land/p/"+agentAddr+"/base/v0" {
+		t.Errorf("the live package was not recorded: %+v", d)
+	}
+}
+
+// -print leaves the tree exactly as it found it, including the record.
+func TestPublishPrintWritesNothingToTheTree(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "p/moul/base", "gno.land/p/moul/base/v0", "package base\n")
+	commit(t, root, "seed")
+	mustRun(t, root, "sync")
+
+	f := newFakeChain(t)
+	f.namesEnabled = true
+	f.live["gno.land/p/"+agentAddr+"/base/v0"] = true
+
+	before := readFile(t, filepath.Join(root, "p/moul/base/gnomod.toml"))
+	mustRun(t, root, "publish", "-print", "-rpc", f.srv.URL, "-chainid", "test-1",
+		"-key", "agent", "-addr", agentAddr)
+	if after := readFile(t, filepath.Join(root, "p/moul/base/gnomod.toml")); after != before {
+		t.Errorf("-print wrote the working tree:\n%s", after)
+	}
+}

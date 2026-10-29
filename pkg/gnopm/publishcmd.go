@@ -470,6 +470,13 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 		e.logf("%s%s\n", e.label(""), e.bad(m.why()))
 	}
 
+	// Before the two early exits below, because both of them know something the
+	// tree does not: which packages are live at a moved path. A run with
+	// nothing left to send is exactly the run that completes the record.
+	if err := recordWhatIsLive(e, fs, chain, plans); err != nil {
+		return err
+	}
+
 	if blocked > 0 {
 		return fmt.Errorf("%d package(s) blocked: a dependency named above is not live, "+
 			"and nothing in this workspace can publish it", blocked)
@@ -851,6 +858,43 @@ func emitHandoff(e *Env, fs *flag.FlagSet, h *handoff, probe *Probe, key, creato
 		err = rerr
 	}
 	return err
+}
+
+// recordWhatIsLive writes the rows for packages the chain already holds at a
+// moved path, without sending anything.
+//
+// The record has to converge whether or not this particular run had something
+// to publish, and the two runs that have nothing are precisely the ones that
+// know the most: the one where everything is already live, and the one blocked
+// behind a parked dependency. Without this, a workspace fully published to a
+// testnet carries no record of it at all, and a session interrupted by a slow
+// approver loses the record for everything the earlier attempts landed.
+//
+// Nothing is written under -print, which must leave the tree exactly as it
+// found it, or under -record=false.
+func recordWhatIsLive(e *Env, fs *flag.FlagSet, chain *Chain, plans []plan) error {
+	if flagBool(fs, "print") || !flagBool(fs, "record") {
+		return nil
+	}
+	live := map[string]bool{}
+	for _, pl := range plans {
+		if pl.state == StateLive && pl.upload != pl.pkg.Module {
+			live[pl.upload] = true
+		}
+	}
+	if len(live) == 0 {
+		return nil
+	}
+	rev, _ := gitHead(e.Root)
+	n, err := recordDeployments(e, chain.ID, webOrigin(chain, flagString(fs, "web")), rev, plans, live, true)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		e.logf("%s%s\n", e.label("record"), fmt.Sprintf(
+			"%d gnomod.toml updated in the tree for what is already live; commit them", n))
+	}
+	return nil
 }
 
 // settleAfter is what a broadcast waits for before the NEXT document is
