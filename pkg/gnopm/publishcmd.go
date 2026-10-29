@@ -577,6 +577,15 @@ func afterBroadcast(e *Env, fs *flag.FlagSet, chain *Chain, plans []plan, pm *pa
 	e.logf("%s%s\n", e.label("live"), e.ok(fmt.Sprintf(
 		"%d of %d path(s) live on %s, in %s", len(live), len(sent), chain.ID, took(start))))
 
+	// The chain already told us about these, before anything was sent: they are
+	// at a moved path and live, which on a workspace this size usually means an
+	// earlier attempt landed them and stopped. They belong in the record.
+	for _, pl := range plans {
+		if pl.state == StateLive && pl.upload != pl.pkg.Module {
+			live[pl.upload] = true
+		}
+	}
+
 	origin := webOrigin(chain, flagString(fs, "web"))
 	for _, u := range liveURLs(origin, plans, live, 3) {
 		e.logf("%s%s\n", e.label(""), e.dim(u))

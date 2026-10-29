@@ -128,6 +128,13 @@ func livePathsNow(c *Chain, paths []string) (map[string]bool, error) {
 // stale testnet URL left in the tree is worse than no URL at all. git history
 // keeps the record if anybody wants it. -keep-deployments opts out.
 //
+// A package already live at its moved path gets a row too, even though this run
+// did not send it. A publish of a workspace this size does not always finish in
+// one go -- a layer whose approver is slow stops the run, by design -- and the
+// row says where this version RUNS, not who put it there. Without this the
+// record for everything an earlier attempt landed would be lost on the re-run
+// that completes it.
+//
 // A version pinned to this repository's history is skipped, and that is not an
 // oversight: its bytes come from the generated assembly under .gnopm, which is
 // gitignored and rebuilt from a commit. There is no tracked file to write to,
@@ -141,7 +148,14 @@ func recordDeployments(e *Env, chainID, origin, revision string, plans []plan, l
 	}
 	var edits []edit
 	for _, pl := range plans {
-		if !publishes(pl) || !live[pl.upload] {
+		if !live[pl.upload] {
+			continue
+		}
+		if pl.upload == pl.pkg.Module && !publishes(pl) {
+			// Dropping a record is destructive and adding one is not, so the
+			// forget branch below only ever fires for a package THIS run put
+			// at its canonical path. The record branch is happy to fill in
+			// one an earlier run left behind; see recordDeployment's caller.
 			continue
 		}
 		if pl.pinned {

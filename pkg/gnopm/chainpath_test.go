@@ -400,3 +400,46 @@ func TestPublishWaitsForAParkedLayerBeforeSigningTheNext(t *testing.T) {
 		t.Errorf("%d client invocation(s), want the first sign and broadcast only: %v", len(ran), ran)
 	}
 }
+
+// A publish of a workspace this size does not always finish in one go: a layer
+// whose approver is slow stops the run, by design. The row says where a version
+// RUNS, not who put it there, so the run that finishes the job records what the
+// earlier one landed. Without this the record for everything already live is
+// lost at exactly the moment it is completed.
+func TestPublishRecordsAPathAnEarlierRunLanded(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "p/moul/base", "gno.land/p/moul/base/v0",
+		"package base\n\nfunc B() string { return \"b\" }\n")
+	addPkg(t, root, "r/moul/app", "gno.land/r/moul/app/v0",
+		"package app\n\nimport \"gno.land/p/moul/base/v0\"\n\nfunc A() string { return base.B() }\n")
+	commit(t, root, "seed")
+	mustRun(t, root, "sync")
+
+	f := newFakeChain(t)
+	f.namesEnabled = true
+	// base went up under the moved path on an earlier attempt, and nothing
+	// wrote its row because that attempt stopped before it could.
+	f.live["gno.land/p/"+agentAddr+"/base/v0"] = true
+
+	if _, report, err := publishRun(t, root, f, 0, "-addr", agentAddr, "-key", "agent",
+		"-web", "https://onyx.example", "-wait", "1s"); err != nil {
+		t.Fatalf("publish: %v\n%s", err, report)
+	}
+
+	body := readFile(t, filepath.Join(root, "p/moul/base/gnomod.toml"))
+	d, ok := deployedAt(body, "test-1")
+	if !ok {
+		t.Fatalf("no row for the package an earlier run landed:\n%s", body)
+	}
+	if d.Path != "gno.land/p/"+agentAddr+"/base/v0" {
+		t.Errorf("row path = %q", d.Path)
+	}
+	if d.URL != "https://onyx.example/p/"+agentAddr+"/base/v0" {
+		t.Errorf("row url = %q", d.URL)
+	}
+	// The package this run sent never went live on the fake, so it gets no row:
+	// the record is of what RUNS, and nothing here proved that it does.
+	if _, ok := deployedAt(readFile(t, filepath.Join(root, "r/moul/app/gnomod.toml")), "test-1"); ok {
+		t.Error("a package that never answered live was recorded as deployed")
+	}
+}
