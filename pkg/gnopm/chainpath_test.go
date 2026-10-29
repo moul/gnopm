@@ -390,7 +390,7 @@ func TestPublishWaitsForAParkedLayerBeforeSigningTheNext(t *testing.T) {
 	// broadcast and nothing ever becomes live, which is exactly the shape of
 	// an inert chain whose approver has not got to it.
 
-	ran, report, err := publishRun(t, root, f, 0, "-addr", agentAddr, "-key", "agent", "-wait", "1s")
+	ran, report, err := publishRunNoApprover(t, root, f, 0, "-addr", agentAddr, "-key", "agent", "-wait", "1s")
 	if err == nil {
 		t.Fatalf("the run carried on past a parked layer:\n%s", report)
 	}
@@ -423,7 +423,9 @@ func TestPublishRecordsAPathAnEarlierRunLanded(t *testing.T) {
 	// wrote its row because that attempt stopped before it could.
 	f.live["gno.land/p/"+agentAddr+"/base/v0"] = true
 
-	if _, report, err := publishRun(t, root, f, 0, "-addr", agentAddr, "-key", "agent",
+	// No approver: what this run sends never goes live, so the only row that
+	// can be written is the one for what an earlier run landed.
+	if _, report, err := publishRunNoApprover(t, root, f, 0, "-addr", agentAddr, "-key", "agent",
 		"-web", "https://onyx.example", "-wait", "1s"); err != nil {
 		t.Fatalf("publish: %v\n%s", err, report)
 	}

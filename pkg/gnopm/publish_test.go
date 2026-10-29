@@ -2,6 +2,7 @@ package gnopm
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -351,7 +352,24 @@ type ranCmd struct {
 // publishRun runs `gnopm publish` with the client replaced, and returns what
 // the client was asked to do. fail is the 1-based index of the invocation that
 // should fail, or 0 for a run where everything succeeds.
+//
+// A successful broadcast makes the document's packages LIVE on the fake chain,
+// which is the approver's job on a chain that parks and the chain's own on one
+// that does not. Without it the fake is a chain where nothing a publish sends
+// ever arrives, and publish now notices: it waits for a layer to go live before
+// signing the next one, because add_package type-checks imports against the
+// store and a parked package is not in it. See publishRunNoApprover for the
+// test that wants exactly that.
 func publishRun(t *testing.T, root string, f *fakeChain, fail int, args ...string) (ran []ranCmd, report string, err error) {
+	return publishRunWith(t, root, f, fail, true, args...)
+}
+
+// publishRunNoApprover is publishRun on a chain whose approver never comes.
+func publishRunNoApprover(t *testing.T, root string, f *fakeChain, fail int, args ...string) (ran []ranCmd, report string, err error) {
+	return publishRunWith(t, root, f, fail, false, args...)
+}
+
+func publishRunWith(t *testing.T, root string, f *fakeChain, fail int, approve bool, args ...string) (ran []ranCmd, report string, err error) {
 	t.Helper()
 	prev := startClient
 	t.Cleanup(func() { startClient = prev })
@@ -360,12 +378,40 @@ func publishRun(t *testing.T, root string, f *fakeChain, fail int, args ...strin
 		if fail == len(ran) {
 			return fmt.Errorf("fake client refused")
 		}
+		if approve && len(a) > 0 && a[0] == "broadcast" {
+			enableBroadcast(t, f, a[len(a)-1])
+		}
 		return nil
 	}
 	var out, errw bytes.Buffer
 	full := append([]string{"publish", "-C", root, "-rpc", f.srv.URL, "-chainid", "test-1"}, args...)
 	err = Run(full, &out, &errw)
 	return ran, errw.String(), err
+}
+
+// enableBroadcast is the approver: every package in the broadcast document
+// becomes live on the fake chain.
+func enableBroadcast(t *testing.T, f *fakeChain, docPath string) {
+	t.Helper()
+	b, err := os.ReadFile(docPath)
+	if err != nil {
+		return // a -print run writes documents it never broadcasts
+	}
+	var doc struct {
+		Msgs []struct {
+			Package struct {
+				Path string `json:"path"`
+			} `json:"package"`
+		} `json:"msg"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil {
+		t.Fatalf("reading back %s: %v", docPath, err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, m := range doc.Msgs {
+		f.live[m.Package.Path] = true
+	}
 }
 
 // chainRepo is three packages in a line: app imports lib imports base.
