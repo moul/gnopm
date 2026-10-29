@@ -209,6 +209,27 @@ func recordDeployment(body string, d deployment) (string, error) {
 	return withDeployments(body, out)
 }
 
+// fillDeployment writes a row only when that chain has none, and is what a run
+// that did NOT send the package uses.
+//
+// The difference from recordDeployment is the whole correctness of the
+// revision field. A package found already live was deployed by an earlier run,
+// at a commit this one cannot know: stamping it with today's HEAD claims the
+// bytes on chain came from a commit they predate. It is also a loop -- writing
+// the rows moves HEAD, so the next run rewrites every one of them, forever.
+// Both were real: committing 98 rows made the next publish rewrite all 98 with
+// the commit that had just recorded them.
+//
+// So an existing row is left exactly as it is. The one case that would want a
+// refresh, a genuine redeploy at the same path, goes through recordDeployment
+// instead, because that run actually sent the bytes and knows the commit.
+func fillDeployment(body string, d deployment) (string, error) {
+	if _, ok := deployedAt(body, d.Chain); ok {
+		return body, nil
+	}
+	return recordDeployment(body, d)
+}
+
 // forgetDeployment drops the row for one chain, which is what a successful
 // publish at the CANONICAL path means: the rehearsal is over, the real path
 // holds the package, and a stale testnet URL left behind is worse than no URL

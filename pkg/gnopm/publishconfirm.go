@@ -232,7 +232,14 @@ func recordDeployments(e *Env, chainID, origin, revision string, plans []plan, l
 				Revision: revision,
 				At:       nowUTC(),
 			}
-			next, err := recordDeployment(body, row)
+			// Authoritative only for what THIS run sent. For a package
+			// found already live the revision is unknowable here, so an
+			// existing row is left alone; see fillDeployment.
+			write := fillDeployment
+			if publishes(pl) {
+				write = recordDeployment
+			}
+			next, err := write(body, row)
 			if err != nil {
 				return 0, fmt.Errorf("%s/gnomod.toml: %w", pl.pkg.Dir, err)
 			}

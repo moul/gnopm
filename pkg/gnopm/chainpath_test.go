@@ -562,3 +562,40 @@ func TestPublishPrintWritesNothingToTheTree(t *testing.T) {
 		t.Errorf("-print wrote the working tree:\n%s", after)
 	}
 }
+
+// A run that did not send the package leaves its row exactly as it is.
+//
+// The revision names the commit the deployed bytes came from, and a run that
+// found the package already live cannot know it. Stamping today's HEAD there is
+// a claim about the chain that is false, and it is a loop: writing the rows
+// moves HEAD, so the next run rewrites every one of them. Both happened --
+// committing 98 rows made the next publish rewrite all 98 with the commit that
+// had just recorded them.
+func TestPublishDoesNotRestampARowItDidNotEarn(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "p/moul/base", "gno.land/p/moul/base/v0", "package base\n")
+	moved := "gno.land/p/" + agentAddr + "/base/v0"
+	body, err := recordDeployment(
+		readFile(t, filepath.Join(root, "p/moul/base/gnomod.toml")),
+		deployment{Chain: "test-1", Path: moved, URL: "https://onyx.example/p/" + agentAddr + "/base/v0",
+			Revision: "0000000000000000000000000000000000000000", At: "2026-01-01T00:00:00Z"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(root, "p/moul/base/gnomod.toml"), body)
+	commit(t, root, "seed")
+	mustRun(t, root, "sync")
+
+	f := newFakeChain(t)
+	f.namesEnabled = true
+	f.live[moved] = true
+
+	if _, report, err := publishRun(t, root, f, 0, "-addr", agentAddr, "-key", "agent",
+		"-web", "https://onyx.example"); err != nil {
+		t.Fatalf("publish: %v\n%s", err, report)
+	}
+	d, _ := deployedAt(readFile(t, filepath.Join(root, "p/moul/base/gnomod.toml")), "test-1")
+	if d.Revision != "0000000000000000000000000000000000000000" || d.At != "2026-01-01T00:00:00Z" {
+		t.Errorf("a row this run did not earn was restamped: %+v", d)
+	}
+}
