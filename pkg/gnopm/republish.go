@@ -47,17 +47,28 @@ type republishCheck struct {
 // The workspace-wide path goes through republishScanner, because at 282 live
 // packages the round trips, not the comparison, are the whole cost.
 func checkRepublish(c *Chain, root string, p Package, includeDocs bool) (republishCheck, error) {
-	return (&republishScanner{chain: c, root: root, docs: includeDocs}).check(p)
+	return (&republishScanner{chain: c, root: root, docs: includeDocs}).check(p, p.Module, nil)
 }
 
-// check compares the working tree's copy of p against the chain's.
+// check compares what this run WOULD send against what the chain holds.
+//
+// upload is the path the chain is asked about, which is not p.Module on a chain
+// where the signer may not use that namespace (chainpath.go), and bodies are
+// the files gnopm rewrote on the way out. Both are needed or the comparison
+// compares two things that were never meant to be equal: the chain's copy of a
+// package deployed under an address path, against the tree's copy that still
+// names the canonical one. That is the drift this would otherwise report
+// forever, on every package, on every rehearsal chain.
 //
 // Worst case it is the gnomod.toml for the private flag, then the file list,
 // then one read per file. Best case, a public package whose flag is already on
 // disk, it is no reads at all.
-func (s *republishScanner) check(p Package) (republishCheck, error) {
+func (s *republishScanner) check(p Package, upload string, bodies map[string]string) (republishCheck, error) {
 	root, includeDocs := s.root, s.docs
-	private, ok, err := s.chainPrivateCached(p.Module)
+	if upload == "" {
+		upload = p.Module
+	}
+	private, ok, err := s.chainPrivateCached(upload)
 	if err != nil {
 		return republishCheck{}, err
 	}
@@ -74,13 +85,17 @@ func (s *republishScanner) check(p Package) (republishCheck, error) {
 			"and the flag binds at the first publish and cannot be changed after"}, nil
 	}
 
-	onChain, _, err := s.chainSourceHashes(p.Module)
+	onChain, _, err := s.chainSourceHashes(upload)
 	if err != nil {
 		return republishCheck{}, err
 	}
 	local, err := localSource(root + "/" + p.Dir)
 	if err != nil {
 		return republishCheck{}, err
+	}
+	// What would be sent, not what is on disk. See the doc comment.
+	for name, body := range bodies {
+		local[name] = body
 	}
 
 	changed := diffHashed(hashSource(local), onChain)

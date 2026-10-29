@@ -38,6 +38,10 @@ type publishCmd struct {
 	short  string
 	name   string     // the client binary, "gnokey" unless -gnokey-cmd said otherwise
 	groups [][]string // one display line each
+	// then runs after this command succeeds, and its error stops the run like
+	// the command's own would. It is how a broadcast waits for what it just
+	// sent to go live before the next one is signed; see runHandoff.
+	then func() error
 }
 
 func (c publishCmd) flat() []string {
@@ -131,6 +135,15 @@ func (e *Env) runPublish(cmds []publishCmd) error {
 		// run is already under way. Echoing it by default put a 200-column
 		// line above every prompt, which is the line people stopped reading.
 		e.tracef("%s%s\n", e.label(""), e.dim(c.name+" "+strings.Join(quoteAll(c.flat()), " ")))
+		if c.name == "" {
+			// A step that is not a client invocation at all: see publishCmd.then.
+			if c.then != nil {
+				if err := c.then(); err != nil {
+					return err
+				}
+			}
+			continue
+		}
 		if err := startClient(c.name, c.flat(), out, errw); err != nil {
 			// Say how far it got. After a partial run the chain and the plan
 			// disagree, and the next thing to do is re-read the chain rather
@@ -138,6 +151,11 @@ func (e *Env) runPublish(cmds []publishCmd) error {
 			return fmt.Errorf("%s failed on %d of %d (%s): %w\n"+
 				"  the earlier ones already landed; re-run `gnopm publish` to see what is still missing",
 				c.name, i+1, len(cmds), c.note, err)
+		}
+		if c.then != nil {
+			if err := c.then(); err != nil {
+				return err
+			}
 		}
 	}
 	e.logf("%s%s\n", e.label("ok"), e.ok(fmt.Sprintf("%d command(s), all reported success", len(cmds))))

@@ -64,9 +64,10 @@ func TestVerifyDeployedCatchesADrift(t *testing.T) {
 	if !strings.Contains(errb, "differs") || !strings.Contains(errb, "gno.land/p/a/v0") {
 		t.Errorf("the report does not name the package:\n%s", errb)
 	}
-	// Both hashes, because "they differ" without saying how is not actionable.
-	if strings.Count(errb, hashPrefix) < 2 {
-		t.Errorf("the report does not show both hashes:\n%s", errb)
+	// The files, because "they differ" without saying WHICH is not actionable,
+	// and a pair of hashes was not: it said something moved and never what.
+	if !strings.Contains(errb, "1 file(s): a.gno") {
+		t.Errorf("the report does not name the file that moved:\n%s", errb)
 	}
 	if !strings.Contains(err.Error(), "new version") {
 		t.Errorf("the error does not say what fixes it: %v", err)

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // buildVersion reports the module version and VCS revision stamped into the
@@ -704,6 +705,57 @@ version you are about to publish.
                repository GitHub says is public is named, unless the file
                declares [source] itself. -source=false to send the file as is.
 
+  -path        where packages go on THIS chain. Default auto.
+
+               A gno package path is its authorization: r/sys/names grants
+               add_package only where the namespace IS the signer's address, or
+               where r/sys/users resolves it to the signer. So
+               gno.land/r/moul/zones/v0 can only be sent by the key that owns
+               the name "moul" on that chain, and no other key can rehearse this
+               workspace on a testnet under the paths it will carry on mainnet.
+
+               The canonical path stays in the tree. Where the signer may not
+               use that namespace, the UPLOAD goes under the signer's own
+               address path, which needs no registration anywhere, and the
+               intra-workspace imports move with it: an import names a package
+               by path, so a package that moved while its imports did not is a
+               package whose dependencies do not exist on the target chain.
+               Imports of anything outside this workspace are left alone.
+
+                 auto       ask the chain's own verifier, once per namespace,
+                            and move only what it says this signer may not use.
+                            On mainnet with the owner's key nothing moves.
+                            Anything the chain will not answer is left alone.
+                 canonical  never move. The old behaviour.
+                 address    move everything not already under the signer's
+                            address, without asking.
+
+               A path that moves also gets a [[deployment]] row in the tree's
+               gnomod.toml, recording the chain, the path, the URL, the revision
+               and the time. That table is the mirror of [source]: it goes in
+               the tree and is stripped from every upload, on every chain.
+
+               gnomod.toml has a replace directive and it is NOT the answer:
+               the chain refuses a package that carries one outright
+               ("development packages are not allowed"). There is no path
+               aliasing on chain either. Rewriting the uploaded copy is the only
+               mechanism that exists.
+
+  -web         the gnoweb origin to build a recorded URL from. Default: the
+               origin the chain was discovered from, or the RPC host with a
+               leading "rpc." removed.
+
+  -wait        after broadcasting, poll until the uploaded paths are live, and
+               report what actually went live rather than what was accepted. A
+               chain with the inert policy PARKS a submission, so a green
+               broadcast is not a deploy. Default 90s; 0 skips the poll, and
+               then nothing is recorded because nothing is known.
+
+  -record      write the [[deployment]] rows for what went live under a moved
+               path, and drop a chain's rows once the CANONICAL path goes live
+               there: the rehearsal is over and a stale testnet URL is worse
+               than none. On by default. -keep-deployments keeps them.
+
   -v           say what is checked and whether the chain or the cache answered
   -no-cache    ask the chain everything, ignoring ~/.gnopm`,
 			flags: func(fs *flag.FlagSet) {
@@ -719,6 +771,11 @@ version you are about to publish.
 				fs.Bool("republish", false, "also replace a live package whose source has changed, when the chain's copy is private")
 				fs.Bool("republish-docs", false, "with -republish, include a package whose only changes are .md files")
 				fs.Bool("source", true, "write [source] (repository, path, commit) into the uploaded gnomod.toml; never into the working tree")
+				fs.String("path", "auto", "where packages go on this chain: auto, canonical or address")
+				fs.String("web", "", "gnoweb origin for the recorded URL (default: derived from the RPC host)")
+				fs.Duration("wait", 90*time.Second, "after broadcasting, poll until the uploaded paths are live; 0 to skip")
+				fs.Bool("record", true, "write [[deployment]] rows into the tree for what went live under a moved path")
+				fs.Bool("keep-deployments", false, "with -record, keep the rows for a chain even after the canonical path goes live")
 			},
 			run: cmdPublish,
 		},
@@ -1519,6 +1576,18 @@ func flagInt(fs *flag.FlagSet, name string) int {
 	}
 	n, _ := strconv.Atoi(f.Value.String())
 	return n
+}
+
+func flagDuration(fs *flag.FlagSet, name string) time.Duration {
+	f := fs.Lookup(name)
+	if f == nil {
+		return 0
+	}
+	d, err := time.ParseDuration(f.Value.String())
+	if err != nil {
+		return 0
+	}
+	return d
 }
 
 func sortedModules(l *Lock) []LockEntry {

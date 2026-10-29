@@ -139,12 +139,12 @@ func TestPublishStampsThePinnedCommitNotHead(t *testing.T) {
 
 	pl := &plan{pkg: Package{Dir: assemblyRelOf("gno.land/p/moul/base/v0"), Module: "gno.land/p/moul/base/v0"}}
 	pin := en.Source
-	if err := pl.stampSource(root, r, &pin); err != nil {
+	if err := pl.prepareUpload(root, r, &pin, nil, "gno.land"); err != nil {
 		t.Fatal(err)
 	}
-	_, s, found, err := splitSource(pl.gnomod)
+	_, s, found, err := splitSource(pl.bodies["gnomod.toml"])
 	if err != nil || !found {
-		t.Fatalf("no [source] was stamped (found=%v): %v\n%s", found, err, pl.gnomod)
+		t.Fatalf("no [source] was stamped (found=%v): %v\n%s", found, err, pl.bodies["gnomod.toml"])
 	}
 	if s.Revision != en.Source.Commit {
 		t.Errorf("revision is %q, want the pinned commit %q", s.Revision, en.Source.Commit)

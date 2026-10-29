@@ -1,0 +1,601 @@
+package gnopm
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+const agentAddr = "g1magld5ptgzaktqcexxq0pgq5lmdf0kz6re8hlv"
+
+func TestAddressPathMovesOnlyTheNamespace(t *testing.T) {
+	for _, tc := range []struct {
+		name, in, want string
+		ok             bool
+	}{
+		{"a realm", "gno.land/r/moul/zones/v0", "gno.land/r/" + agentAddr + "/zones/v0", true},
+		{"a package", "gno.land/p/moul/md/v0", "gno.land/p/" + agentAddr + "/md/v0", true},
+		{"a deep path", "gno.land/r/moul/x/upgrade/lazy/v1", "gno.land/r/" + agentAddr + "/x/upgrade/lazy/v1", true},
+		{"already under this address", "gno.land/r/" + agentAddr + "/zones/v0", "", false},
+		{"someone else's address", "gno.land/r/g1other/zones/v0", "gno.land/r/" + agentAddr + "/zones/v0", true},
+		{"not a package path", "gno.land/r/moul", "", false},
+		{"not p or r", "gno.land/x/moul/thing/v0", "", false},
+	} {
+		got, ok := addressPath(tc.in, agentAddr)
+		if ok != tc.ok {
+			t.Errorf("%s: addressPath ok = %v, want %v", tc.name, ok, tc.ok)
+			continue
+		}
+		if ok && got != tc.want {
+			t.Errorf("%s: addressPath = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The rewrite is bounded by the import declaration, and the bound is the whole
+// safety argument: a quoted path in ordinary code is a link target, a
+// PkgPath() comparison or a prefix constant, and editing one is a textual
+// change to program logic. See chainpath.go.
+func TestRewriteImportsMovesImportsAndNothingElse(t *testing.T) {
+	src := `// Package app does things with gno.land/p/moul/md/v0.
+package app
+
+import (
+	"strings"
+
+	"gno.land/p/moul/md/v0"
+	ufmt "gno.land/p/nt/ufmt"
+)
+
+const home = "gno.land/r/moul/home/v0"
+
+func Render(_ string) string {
+	if strings.HasPrefix(home, "gno.land/r/moul/") {
+		return md.H1("x") + ufmt.Sprintf("%s", home)
+	}
+	return ""
+}
+`
+	to := func(p string) string {
+		switch p {
+		case "gno.land/p/moul/md/v0":
+			return "gno.land/p/" + agentAddr + "/md/v0"
+		case "gno.land/r/moul/home/v0":
+			return "gno.land/r/" + agentAddr + "/home/v0"
+		}
+		return p
+	}
+	got := rewriteImports(src, "gno.land", to)
+
+	if !strings.Contains(got, `"gno.land/p/`+agentAddr+`/md/v0"`) {
+		t.Errorf("the import was not moved:\n%s", got)
+	}
+	if !strings.Contains(got, `ufmt "gno.land/p/nt/ufmt"`) {
+		t.Errorf("an import outside this workspace was touched; it exists on the chain under its real path:\n%s", got)
+	}
+	if !strings.Contains(got, `const home = "gno.land/r/moul/home/v0"`) {
+		t.Errorf("a path in a string literal was rewritten; that is program logic, not an import:\n%s", got)
+	}
+	if !strings.Contains(got, `// Package app does things with gno.land/p/moul/md/v0.`) {
+		t.Errorf("the doc comment was rewritten:\n%s", got)
+	}
+	if !strings.Contains(got, `strings.HasPrefix(home, "gno.land/r/moul/")`) {
+		t.Errorf("a prefix constant was rewritten:\n%s", got)
+	}
+
+	// And the ones it did not touch are named, rather than discovered on chain.
+	outside := outsideImports(src, "gno.land", func(p string) bool { return to(p) != p })
+	if len(outside) != 1 || outside[0] != "gno.land/r/moul/home/v0" {
+		t.Errorf("outsideImports = %q, want the one path named outside an import", outside)
+	}
+}
+
+func TestRewriteImportsLeavesAFileWithNothingToMove(t *testing.T) {
+	src := "package a\n\nimport \"gno.land/p/nt/avl\"\n\nfunc A() {}\n"
+	if got := rewriteImports(src, "gno.land", func(p string) string { return p }); got != src {
+		t.Errorf("a file with nothing to move was rewritten:\n%s", got)
+	}
+}
+
+func TestWithModuleRewritesOnlyTheModuleLine(t *testing.T) {
+	in := "module = \"gno.land/r/moul/zones/v0\"\ngno = \"0.9\"\nprivate = true\n"
+	got := withModule(in, "gno.land/r/"+agentAddr+"/zones/v0")
+	want := "module = \"gno.land/r/" + agentAddr + "/zones/v0\"\ngno = \"0.9\"\nprivate = true\n"
+	if got != want {
+		t.Errorf("withModule =\n%s\nwant\n%s", got, want)
+	}
+	if got := withModule("gno = \"0.9\"\n", "x"); got != "gno = \"0.9\"\n" {
+		t.Errorf("a file with no module line was changed: %q", got)
+	}
+}
+
+// -path auto asks the chain's own verifier, and asks it once per NAMESPACE.
+// Once per package would be 320 round trips on this workspace for an answer
+// that is the same every time.
+func TestChainPathsAsksTheChainOncePerNamespace(t *testing.T) {
+	f := newFakeChain(t)
+	f.namesEnabled = true
+	f.owners["alice"] = "g1alice"
+	e := probeEnv(t)
+	c := &Chain{RPC: f.srv.URL, ID: "test-1"}
+
+	mods := []string{
+		"gno.land/p/moul/md/v0", "gno.land/p/moul/md/v1", "gno.land/r/moul/home/v0",
+		"gno.land/p/alice/x/v0",
+	}
+	pm, err := chainPaths(e, c, pathAuto, agentAddr, mods)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.evals != 2 {
+		t.Errorf("the chain was asked %d times, want once per namespace (2)", f.evals)
+	}
+	if pm.count() != 4 {
+		t.Fatalf("%d package(s) moved, want all 4: this signer owns neither namespace", pm.count())
+	}
+	if got := pm.Upload("gno.land/r/moul/home/v0"); got != "gno.land/r/"+agentAddr+"/home/v0" {
+		t.Errorf("Upload = %q", got)
+	}
+	if got := pm.Upload("gno.land/p/nt/avl/v0"); got != "gno.land/p/nt/avl/v0" {
+		t.Errorf("a path outside the workspace was moved: %q", got)
+	}
+}
+
+// The owner's own key on the chain that registered the name: nothing moves, and
+// nothing downstream can tell this code is there. This is mainnet.
+func TestChainPathsLeavesTheOwnerAlone(t *testing.T) {
+	f := newFakeChain(t)
+	f.namesEnabled = true
+	f.owners["moul"] = "g1manfred47kzduec920z88wfr64ylksmdcedlf5"
+	e := probeEnv(t)
+	c := &Chain{RPC: f.srv.URL, ID: "test-1"}
+	pm, err := chainPaths(e, c, pathAuto, "g1manfred47kzduec920z88wfr64ylksmdcedlf5",
+		[]string{"gno.land/p/moul/md/v0", "gno.land/r/moul/home/v0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pm.moved() {
+		t.Errorf("the namespace owner's publish moved %d path(s); it must move none", pm.count())
+	}
+}
+
+// A chain that will not answer is left alone, and the two errors are not
+// symmetric: publishing at the canonical path when the signer is not
+// authorized wastes a transaction the chain refuses, while publishing at an
+// address path when they WERE authorized puts the package at a path nobody
+// asked for and that cannot be taken back.
+func TestChainPathsLeavesThePathAloneWhenTheChainWillNotSay(t *testing.T) {
+	f := newFakeChain(t)
+	f.noNames = true
+	var sb strings.Builder
+	e := &Env{Out: &sb, Errw: &sb, CacheDir: t.TempDir()}
+	c := &Chain{RPC: f.srv.URL, ID: "test-1"}
+	pm, err := chainPaths(e, c, pathAuto, agentAddr, []string{"gno.land/r/moul/home/v0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pm.moved() {
+		t.Error("a chain that could not answer moved a path anyway")
+	}
+	if !strings.Contains(sb.String(), "could not say whether") {
+		t.Errorf("the run was silent about it:\n%s", sb.String())
+	}
+}
+
+func TestChainPathsRejectsAnUnknownMode(t *testing.T) {
+	_, err := chainPaths(probeEnv(t), &Chain{ID: "x"}, "sideways", agentAddr, nil)
+	if err == nil || !strings.Contains(err.Error(), "-path") {
+		t.Errorf("err = %v, want a complaint about -path", err)
+	}
+}
+
+// End to end, and the case the whole file exists for: a package goes up under
+// the signer's address AND the import of its workspace dependency goes with
+// it. Without the second half the deploy is broken, because the chain has
+// nothing at the path the import names.
+func TestPublishMovesAPathAndItsImports(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "p/moul/base", "gno.land/p/moul/base/v0",
+		"package base\n\nfunc B() string { return \"b\" }\n")
+	write(t, filepath.Join(root, "r/moul/app/gnomod.toml"),
+		"module = \"gno.land/r/moul/app/v0\"\ngno = \"0.9\"\n")
+	write(t, filepath.Join(root, "r/moul/app/app.gno"),
+		"package app\n\nimport (\n\t\"gno.land/p/moul/base/v0\"\n\t\"gno.land/p/nt/avl\"\n)\n\nvar _ = avl.Tree{}\n\nfunc A() string { return base.B() }\n")
+	commit(t, root, "init")
+	mustRun(t, root, "sync")
+
+	f := newFakeChain(t)
+	f.namesEnabled = true
+	f.live["gno.land/p/nt/avl"] = true
+	out := filepath.Join(t.TempDir(), "tx.json")
+	mustRun(t, root, "publish", "-print", "-rpc", f.srv.URL, "-chainid", "test-1",
+		"-key", "agent", "-addr", agentAddr, "-o", out)
+
+	// Two layers, so two documents: base goes up before what imports it.
+	doc := readFile(t, strings.Replace(out, ".json", ".1.json", 1)) +
+		readFile(t, strings.Replace(out, ".json", ".2.json", 1))
+	for _, want := range []string{
+		`"path": "gno.land/p/` + agentAddr + `/base/v0"`,
+		`"path": "gno.land/r/` + agentAddr + `/app/v0"`,
+		`\"gno.land/p/` + agentAddr + `/base/v0\"`,
+		`module = \"gno.land/p/` + agentAddr + `/base/v0\"`,
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("the transaction document is missing %s\n%s", want, doc)
+		}
+	}
+	if strings.Contains(doc, `\"gno.land/p/moul/base/v0\"`) {
+		t.Errorf("an import still names the canonical path, which does not exist on this chain:\n%s", doc)
+	}
+	if !strings.Contains(doc, `\"gno.land/p/nt/avl\"`) {
+		t.Errorf("an import outside this workspace was moved; it is live under its real path:\n%s", doc)
+	}
+	// The tree is never touched by the rewrite.
+	if got := readFile(t, filepath.Join(root, "r/moul/app/app.gno")); !strings.Contains(got, `"gno.land/p/moul/base/v0"`) {
+		t.Errorf("publish rewrote the working tree:\n%s", got)
+	}
+}
+
+// gnokey reads the directory itself under -pkgdir, so an unbatched run cannot
+// be handed rewritten bytes. Refusing beats sending a package whose
+// dependencies do not exist on the chain it is going to.
+func TestPublishRefusesOneTxPerPackageWhereThePathMoves(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "p/moul/base", "gno.land/p/moul/base/v0", "package base\n")
+	commit(t, root, "init")
+	mustRun(t, root, "sync")
+
+	f := newFakeChain(t)
+	f.namesEnabled = true
+	err := Run([]string{"publish", "-C", root, "-print", "-rpc", f.srv.URL, "-chainid", "test-1",
+		"-key", "agent", "-addr", agentAddr, "-one-tx-per-package"}, os.Stderr, os.Stderr)
+	if err == nil || !strings.Contains(err.Error(), "-one-tx-per-package cannot be used where the path moves") {
+		t.Fatalf("err = %v, want a refusal", err)
+	}
+}
+
+// -path canonical is the way back to the old behaviour, for someone who wants
+// the chain to refuse the transaction rather than have gnopm move it.
+func TestPublishCanonicalModeMovesNothing(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "p/moul/base", "gno.land/p/moul/base/v0", "package base\n")
+	commit(t, root, "init")
+	mustRun(t, root, "sync")
+
+	f := newFakeChain(t)
+	f.namesEnabled = true
+	out := filepath.Join(t.TempDir(), "tx.json")
+	mustRun(t, root, "publish", "-print", "-rpc", f.srv.URL, "-chainid", "test-1",
+		"-key", "agent", "-addr", agentAddr, "-path", "canonical", "-o", out)
+	if doc := readFile(t, out); !strings.Contains(doc, `"path": "gno.land/p/moul/base/v0"`) {
+		t.Errorf("-path canonical moved a path:\n%s", doc)
+	}
+	if f.evals != 0 {
+		t.Errorf("-path canonical asked the chain %d question(s); it should ask none", f.evals)
+	}
+}
+
+func readFile(t *testing.T, p string) string {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// The drift question, and the answer this PR implements for the republish
+// comparison: what is compared is what WOULD be sent, against what the chain
+// holds at the path it was sent to. Without both halves every package
+// rehearsed under an address path reads as drifted forever, which is a
+// reported failure for a deploy that is exactly right.
+func TestRepublishComparesTheRewrittenCopyAtTheMovedPath(t *testing.T) {
+	root := newRepo(t)
+	write(t, filepath.Join(root, "r/moul/app/gnomod.toml"),
+		"module = \"gno.land/r/moul/app/v0\"\ngno = \"0.9\"\nprivate = true\n")
+	write(t, filepath.Join(root, "r/moul/app/app.gno"),
+		"package app\n\nimport \"gno.land/p/moul/base/v0\"\n\nfunc A() string { return base.B() }\n")
+	commit(t, root, "init")
+
+	moved := "gno.land/r/" + agentAddr + "/app/v0"
+	pm := &pathMap{to: map[string]string{
+		"gno.land/r/moul/app/v0":  moved,
+		"gno.land/p/moul/base/v0": "gno.land/p/" + agentAddr + "/base/v0",
+	}}
+	pl := plan{pkg: Package{Dir: "r/moul/app", Module: "gno.land/r/moul/app/v0"}, upload: moved}
+	if err := pl.prepareUpload(root, newSourceResolver(testEnv(root, nil), true), nil, pm, "gno.land"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The chain holds exactly what this run would send, at the moved path.
+	f := newFakeChain(t)
+	f.live[moved] = true
+	f.private[moved] = true
+	f.files[moved+"/app.gno"] = pl.bodies["app.gno"]
+	f.files[moved+"/gnomod.toml"] = pl.bodies["gnomod.toml"]
+
+	s := &republishScanner{chain: &Chain{RPC: f.srv.URL, ID: "test-1"}, root: root}
+	got, err := s.check(pl.pkg, pl.upload, pl.bodies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.eligible {
+		t.Errorf("a rehearsal under a moved path reads as drifted: %q", got.changed)
+	}
+	if !strings.Contains(got.why, "identical") {
+		t.Errorf("why = %q, want it to say the copies match", got.why)
+	}
+
+	// And a real source change still shows up, which is the half that must not
+	// be traded away for the half above.
+	write(t, filepath.Join(root, "r/moul/app/app.gno"),
+		"package app\n\nimport \"gno.land/p/moul/base/v0\"\n\nfunc A() string { return base.B() + \"!\" }\n")
+	pl2 := plan{pkg: pl.pkg, upload: moved}
+	if err := pl2.prepareUpload(root, newSourceResolver(testEnv(root, nil), true), nil, pm, "gno.land"); err != nil {
+		t.Fatal(err)
+	}
+	got2, err := s.check(pl2.pkg, pl2.upload, pl2.bodies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got2.eligible || len(got2.changed) != 1 || got2.changed[0] != "app.gno" {
+		t.Errorf("a real change was missed: eligible=%v changed=%q", got2.eligible, got2.changed)
+	}
+}
+
+// verify -deployed holds no key, so it cannot work the mapping out the way
+// publish does. The rows ARE the mapping, which is the third reason they exist.
+func TestVerifyDeployedReadsTheDeploymentRow(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "r/moul/app", "gno.land/r/moul/app/v0", "package app\n\nfunc A() {}\n")
+	moved := "gno.land/r/" + agentAddr + "/app/v0"
+	body, err := recordDeployment(
+		readFile(t, filepath.Join(root, "r/moul/app/gnomod.toml")),
+		deployment{Chain: "test-1", Path: moved})
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(root, "r/moul/app/gnomod.toml"), body)
+	commit(t, root, "init")
+	mustRun(t, root, "sync")
+
+	f := newFakeChain(t)
+	f.live[moved] = true
+	f.files[moved+"/app.gno"] = "package app\n\nfunc A() {}\n"
+	// What the chain stores: the module line is the deploy path, and it has
+	// stamped its own [addpkg] table over what it was sent.
+	f.files[moved+"/gnomod.toml"] = "module = \"" + moved + "\"\ngno = \"0.9\"\n\n[addpkg]\n  creator = \"" + agentAddr + "\"\n  height = 9\n"
+
+	out := mustRun(t, root, "verify", "-deployed", "-rpc", f.srv.URL, "-chainid", "test-1")
+	if !strings.Contains(out, "1 live, 1 match") {
+		t.Errorf("the recorded path was not read back as a match:\n%s", out)
+	}
+	if !strings.Contains(out, "deployed under a different path") {
+		t.Errorf("the run was silent about the mapping it used:\n%s", out)
+	}
+}
+
+// A chain that parks submissions does not make a package importable when the
+// transaction commits, and add_package type-checks its imports against the
+// store. So a layer that is still parked stops the run before the next
+// document is signed, rather than sending a transaction that cannot pass its
+// type check and being charged for it.
+func TestPublishWaitsForAParkedLayerBeforeSigningTheNext(t *testing.T) {
+	root := chainRepo(t) // app imports lib imports base: three layers
+	f := newFakeChain(t)
+	// The approver never comes: the fake client reports a successful
+	// broadcast and nothing ever becomes live, which is exactly the shape of
+	// an inert chain whose approver has not got to it.
+
+	ran, report, err := publishRunNoApprover(t, root, f, 0, "-addr", agentAddr, "-key", "agent", "-wait", "1s")
+	if err == nil {
+		t.Fatalf("the run carried on past a parked layer:\n%s", report)
+	}
+	if !strings.Contains(err.Error(), "still parked") || !strings.Contains(err.Error(), "type check") {
+		t.Errorf("err = %v, want it to say why nothing more was sent", err)
+	}
+	// sign and broadcast of the FIRST document, and nothing after it.
+	if len(ran) != 2 {
+		t.Errorf("%d client invocation(s), want the first sign and broadcast only: %v", len(ran), ran)
+	}
+}
+
+// A publish of a workspace this size does not always finish in one go: a layer
+// whose approver is slow stops the run, by design. The row says where a version
+// RUNS, not who put it there, so the run that finishes the job records what the
+// earlier one landed. Without this the record for everything already live is
+// lost at exactly the moment it is completed.
+func TestPublishRecordsAPathAnEarlierRunLanded(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "p/moul/base", "gno.land/p/moul/base/v0",
+		"package base\n\nfunc B() string { return \"b\" }\n")
+	addPkg(t, root, "r/moul/app", "gno.land/r/moul/app/v0",
+		"package app\n\nimport \"gno.land/p/moul/base/v0\"\n\nfunc A() string { return base.B() }\n")
+	commit(t, root, "seed")
+	mustRun(t, root, "sync")
+
+	f := newFakeChain(t)
+	f.namesEnabled = true
+	// base went up under the moved path on an earlier attempt, and nothing
+	// wrote its row because that attempt stopped before it could.
+	f.live["gno.land/p/"+agentAddr+"/base/v0"] = true
+
+	// No approver: what this run sends never goes live, so the only row that
+	// can be written is the one for what an earlier run landed.
+	if _, report, err := publishRunNoApprover(t, root, f, 0, "-addr", agentAddr, "-key", "agent",
+		"-web", "https://onyx.example", "-wait", "1s"); err != nil {
+		t.Fatalf("publish: %v\n%s", err, report)
+	}
+
+	body := readFile(t, filepath.Join(root, "p/moul/base/gnomod.toml"))
+	d, ok := deployedAt(body, "test-1")
+	if !ok {
+		t.Fatalf("no row for the package an earlier run landed:\n%s", body)
+	}
+	if d.Path != "gno.land/p/"+agentAddr+"/base/v0" {
+		t.Errorf("row path = %q", d.Path)
+	}
+	if d.URL != "https://onyx.example/p/"+agentAddr+"/base/v0" {
+		t.Errorf("row url = %q", d.URL)
+	}
+	// The package this run sent never went live on the fake, so it gets no row:
+	// the record is of what RUNS, and nothing here proved that it does.
+	if _, ok := deployedAt(readFile(t, filepath.Join(root, "r/moul/app/gnomod.toml")), "test-1"); ok {
+		t.Error("a package that never answered live was recorded as deployed")
+	}
+}
+
+// The confirmation poll costs two queries a round, not one per package.
+//
+// The first version of it asked vm/qfile per path every two seconds. On a
+// 46-package layer that is ~1,400 queries a minute against an endpoint whose
+// ceiling is near 90, and it earned a 429 within minutes and then reported
+// every path as absent -- the one direction this must never be wrong in, since
+// it would stop a publish that was going perfectly well.
+func TestConfirmLiveAsksPerNamespaceNotPerPackage(t *testing.T) {
+	f := newFakeChain(t)
+	var paths []string
+	for i := 0; i < 40; i++ {
+		p := fmt.Sprintf("gno.land/p/%s/pkg%d/v0", agentAddr, i)
+		paths = append(paths, p)
+		f.live[p] = true
+	}
+	paths = append(paths, "gno.land/r/"+agentAddr+"/app/v0")
+	f.live["gno.land/r/"+agentAddr+"/app/v0"] = true
+
+	before := f.count()
+	live, err := confirmLive(probeEnv(t), &Chain{RPC: f.srv.URL, ID: "test-1"}, paths, 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(live) != len(paths) {
+		t.Fatalf("%d of %d live, want all", len(live), len(paths))
+	}
+	// Two prefixes, so two queries. Anything near 41 is the per-path form back.
+	if n := f.count() - before; n > 4 {
+		t.Errorf("%d quer(ies) for %d package(s); want one per namespace", n, len(paths))
+	}
+}
+
+// A run that stops part way still writes down what it landed.
+//
+// Something was broadcast before it stopped and some of it is live, and the
+// tree is the only place that record can live. Writing nothing because the run
+// did not reach the end loses the record for everything it DID land, which on
+// a chain whose approver works a queue is most of a session's work.
+func TestPublishRecordsWhatItLandedBeforeItStopped(t *testing.T) {
+	root := chainRepo(t) // app imports lib imports base: three transactions
+	f := newFakeChain(t)
+	f.namesEnabled = true
+
+	// The third invocation is the sign of tx2, so tx1 was broadcast and
+	// enabled and nothing after it was.
+	_, report, err := publishRun(t, root, f, 3, "-addr", agentAddr, "-key", "agent",
+		"-web", "https://onyx.example", "-wait", "1s")
+	if err == nil {
+		t.Fatalf("the failing client did not stop the run:\n%s", report)
+	}
+
+	body := readFile(t, filepath.Join(root, "p/moul/base/gnomod.toml"))
+	d, ok := deployedAt(body, "test-1")
+	if !ok {
+		t.Fatalf("the package that went live before the run stopped has no row:\n%s", body)
+	}
+	if d.Path != "gno.land/p/"+agentAddr+"/base/v0" {
+		t.Errorf("row path = %q", d.Path)
+	}
+	// And nothing is claimed for what never went up.
+	if _, ok := deployedAt(readFile(t, filepath.Join(root, "r/moul/app/gnomod.toml")), "test-1"); ok {
+		t.Error("a package that was never broadcast was recorded as deployed")
+	}
+}
+
+// The record converges whether or not this run had anything to send. A
+// workspace already fully published to a testnet, and a run blocked behind a
+// parked dependency, are the two runs that know the most and used to write the
+// least: both returned before anything was recorded at all.
+func TestPublishRecordsWhatIsLiveWithNothingToSend(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "p/moul/base", "gno.land/p/moul/base/v0", "package base\n")
+	commit(t, root, "seed")
+	mustRun(t, root, "sync")
+
+	f := newFakeChain(t)
+	f.namesEnabled = true
+	f.live["gno.land/p/"+agentAddr+"/base/v0"] = true
+
+	ran, report, err := publishRun(t, root, f, 0, "-addr", agentAddr, "-key", "agent",
+		"-web", "https://onyx.example")
+	if err != nil {
+		t.Fatalf("publish: %v\n%s", err, report)
+	}
+	if len(ran) != 0 {
+		t.Errorf("a run with nothing to publish invoked the client %d time(s)", len(ran))
+	}
+	if !strings.Contains(report, "nothing to publish") {
+		t.Errorf("the run did not report an empty plan:\n%s", report)
+	}
+	d, ok := deployedAt(readFile(t, filepath.Join(root, "p/moul/base/gnomod.toml")), "test-1")
+	if !ok || d.Path != "gno.land/p/"+agentAddr+"/base/v0" {
+		t.Errorf("the live package was not recorded: %+v", d)
+	}
+}
+
+// -print leaves the tree exactly as it found it, including the record.
+func TestPublishPrintWritesNothingToTheTree(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "p/moul/base", "gno.land/p/moul/base/v0", "package base\n")
+	commit(t, root, "seed")
+	mustRun(t, root, "sync")
+
+	f := newFakeChain(t)
+	f.namesEnabled = true
+	f.live["gno.land/p/"+agentAddr+"/base/v0"] = true
+
+	before := readFile(t, filepath.Join(root, "p/moul/base/gnomod.toml"))
+	mustRun(t, root, "publish", "-print", "-rpc", f.srv.URL, "-chainid", "test-1",
+		"-key", "agent", "-addr", agentAddr)
+	if after := readFile(t, filepath.Join(root, "p/moul/base/gnomod.toml")); after != before {
+		t.Errorf("-print wrote the working tree:\n%s", after)
+	}
+}
+
+// A run that did not send the package leaves its row exactly as it is.
+//
+// The revision names the commit the deployed bytes came from, and a run that
+// found the package already live cannot know it. Stamping today's HEAD there is
+// a claim about the chain that is false, and it is a loop: writing the rows
+// moves HEAD, so the next run rewrites every one of them. Both happened --
+// committing 98 rows made the next publish rewrite all 98 with the commit that
+// had just recorded them.
+func TestPublishDoesNotRestampARowItDidNotEarn(t *testing.T) {
+	root := newRepo(t)
+	addPkg(t, root, "p/moul/base", "gno.land/p/moul/base/v0", "package base\n")
+	moved := "gno.land/p/" + agentAddr + "/base/v0"
+	body, err := recordDeployment(
+		readFile(t, filepath.Join(root, "p/moul/base/gnomod.toml")),
+		deployment{Chain: "test-1", Path: moved, URL: "https://onyx.example/p/" + agentAddr + "/base/v0",
+			Revision: "0000000000000000000000000000000000000000", At: "2026-01-01T00:00:00Z"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(root, "p/moul/base/gnomod.toml"), body)
+	commit(t, root, "seed")
+	mustRun(t, root, "sync")
+
+	f := newFakeChain(t)
+	f.namesEnabled = true
+	f.live[moved] = true
+
+	if _, report, err := publishRun(t, root, f, 0, "-addr", agentAddr, "-key", "agent",
+		"-web", "https://onyx.example"); err != nil {
+		t.Fatalf("publish: %v\n%s", err, report)
+	}
+	d, _ := deployedAt(readFile(t, filepath.Join(root, "p/moul/base/gnomod.toml")), "test-1")
+	if d.Revision != "0000000000000000000000000000000000000000" || d.At != "2026-01-01T00:00:00Z" {
+		t.Errorf("a row this run did not earn was restamped: %+v", d)
+	}
+}
