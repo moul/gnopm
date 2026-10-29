@@ -164,3 +164,39 @@ func TestPrepareUploadStripsRowsAndSizesWhatItSends(t *testing.T) {
 		t.Errorf("bytes = %d, want %d: gas is sized from this", pl.bytes, total)
 	}
 }
+
+// Recording the same deployment twice changes nothing.
+//
+// `at` moves on every call, so a plain replace rewrites every file on every
+// run: the second publish of a session touched 98 gnomod.toml in
+// moul/gno-contracts to change nothing but a timestamp. A row still describing
+// the same deployment keeps the `at` it had, because that is when the thing it
+// describes actually happened.
+func TestRecordDeploymentIsIdempotent(t *testing.T) {
+	first := deployment{Chain: "onyx-1", Path: "gno.land/r/g1a/zones/v0", URL: "https://onyx/r/g1a/zones/v0", Revision: "abc1234", At: "2026-10-29T10:00:00Z"}
+	body, err := recordDeployment(treeGnomod, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again := first
+	again.At = "2026-10-29T18:00:00Z"
+	got, err := recordDeployment(body, again)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != body {
+		t.Errorf("the same deployment rewrote the file:\n%s\nwas\n%s", got, body)
+	}
+
+	// A real change still moves the row, timestamp included.
+	moved := again
+	moved.Revision = "def5678"
+	got, err = recordDeployment(body, moved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, _ := deployedAt(got, "onyx-1")
+	if d.Revision != "def5678" || d.At != "2026-10-29T18:00:00Z" {
+		t.Errorf("a changed deployment did not move: %+v", d)
+	}
+}

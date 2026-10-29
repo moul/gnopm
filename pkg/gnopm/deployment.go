@@ -174,6 +174,13 @@ func withDeployments(body string, rows []deployment) (string, error) {
 // said before. One row per chain: a package is at one path on one chain, and
 // keeping the previous answer would mean keeping a path that is no longer the
 // one anybody should read.
+//
+// Idempotent, and that is not a nicety. `at` moves on every call, so a plain
+// replace rewrites every file on every run: on moul/gno-contracts the second
+// publish of a session touched 98 gnomod.toml to change nothing but a
+// timestamp, which is 98 files of diff for a deploy that did not happen. A row
+// whose chain, path, url and revision all still hold keeps the `at` it already
+// had, because that is when the thing it describes actually happened.
 func recordDeployment(body string, d deployment) (string, error) {
 	_, rows, err := splitDeployments(body)
 	if err != nil {
@@ -184,7 +191,11 @@ func recordDeployment(body string, d deployment) (string, error) {
 	for _, r := range rows {
 		if r.Chain == d.Chain {
 			if !replaced {
-				out = append(out, d)
+				next := d
+				if r.Path == d.Path && r.URL == d.URL && r.Revision == d.Revision {
+					next.At = r.At
+				}
+				out = append(out, next)
 				replaced = true
 			}
 			continue
