@@ -50,6 +50,17 @@ type fakeChain struct {
 	// the error a chain without that query gives, which is the fallback the
 	// republish scan has to keep working through.
 	storage map[string]string
+	// owners maps a namespace to the address r/sys/names says may deploy under
+	// it. A namespace with no entry is refused to everyone but the address
+	// that IS the namespace, which is how the real verifier behaves for an
+	// unregistered name.
+	owners map[string]string
+	// noNames makes vm/qeval unanswerable, which is the chain gnopm must leave
+	// the paths alone on rather than guess about.
+	noNames bool
+	// evals counts IsAuthorizedAddressForNamespace questions, so a test can
+	// prove the chain is asked once per namespace and not once per package.
+	evals int
 	// onQuery, when set, runs at the top of every served query. A test that
 	// wants to know whether a batch is actually parallel has no other way to
 	// see it: a fake answers fast enough that a serial loop and a wide one
@@ -77,7 +88,7 @@ func newFakeChain(t *testing.T) *fakeChain {
 	// would make the next test's "v0 is absent" pass or fail depending on what
 	// ran before it, and `go test` would write to a developer's home.
 	t.Setenv(cacheEnv, t.TempDir())
-	f := &fakeChain{live: map[string]bool{}, parked: map[string]bool{}, private: map[string]bool{}, files: map[string]string{}, storage: map[string]string{}}
+	f := &fakeChain{live: map[string]bool{}, parked: map[string]bool{}, private: map[string]bool{}, files: map[string]string{}, storage: map[string]string{}, owners: map[string]string{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.calls++
@@ -116,6 +127,25 @@ func newFakeChain(t *testing.T) *fakeChain {
 		// arrives is "vm/qpaths?limit=1000" and an exact match would 404 it.
 		abciPath, _, _ := strings.Cut(req.Params.Path, "?")
 		switch abciPath {
+		case "vm/qeval":
+			// The one expression gnopm evaluates: the namespace verifier's own
+			// function, asked rather than reimplemented. See chainpath.go.
+			expr := string(req.Params.Data)
+			if f.noNames {
+				writeABCIError(w, "/vm.InvalidPkgPathError", "package not found: "+expr)
+				return
+			}
+			addr, ns, ok := parseAuthExpr(expr)
+			if !ok {
+				writeABCIError(w, "/std.UnknownRequest", "cannot evaluate "+expr)
+				return
+			}
+			f.mu.Lock()
+			f.evals++
+			owner, known := f.owners[ns]
+			f.mu.Unlock()
+			allowed := ns == addr || (known && owner == addr)
+			writeABCIData(w, fmt.Sprintf("(%t bool)", allowed))
 		case "vm/qinertpaths":
 			if f.noInert {
 				writeABCIError(w, "/std.UnknownRequest", "unknown query path")
@@ -215,6 +245,21 @@ func newFakeChain(t *testing.T) *fakeChain {
 func probeEnv(t *testing.T) *Env {
 	t.Helper()
 	return &Env{Out: io.Discard, Errw: io.Discard, CacheDir: t.TempDir()}
+}
+
+// parseAuthExpr pulls the two arguments out of
+// gno.land/r/sys/names.IsAuthorizedAddressForNamespace("g1…","moul").
+func parseAuthExpr(expr string) (addr, ns string, ok bool) {
+	_, args, found := strings.Cut(expr, "IsAuthorizedAddressForNamespace(")
+	if !found {
+		return "", "", false
+	}
+	args = strings.TrimSuffix(strings.TrimSpace(args), ")")
+	parts := strings.Split(args, ",")
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	return strings.Trim(strings.TrimSpace(parts[0]), `"`), strings.Trim(strings.TrimSpace(parts[1]), `"`), true
 }
 
 func writeABCIData(w http.ResponseWriter, data string) {

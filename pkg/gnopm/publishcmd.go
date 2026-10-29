@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -28,10 +29,20 @@ type plan struct {
 	// changed names the files that differ from the chain's copy, set only for
 	// a republish, so the report can say what the redeploy is actually for.
 	changed []string
-	// gnomod is the gnomod.toml body to upload in place of the one on disk,
-	// "" when they are the same. It differs by the [source] section, which
-	// gnopm writes into the uploaded copy only (source.go).
-	gnomod string
+	// upload is the path this package actually goes to on this chain. It is
+	// the canonical path, the one the tree carries and the one it will have on
+	// mainnet, unless the signer may not deploy under that namespace: see
+	// chainpath.go.
+	upload string
+	// bodies are the uploaded forms of the files that differ from the ones on
+	// disk, by payload name. Two things write here and both write into the
+	// copy only: the [source] table (source.go) and, when the path moves, the
+	// module line and the intra-workspace imports (chainpath.go).
+	bodies map[string]string
+	// outside names the moved paths this package mentions somewhere other than
+	// its import declaration, which are left exactly as written. Reported, not
+	// rewritten: see chainpath.go.
+	outside []string
 	// pinned marks a package whose source left the working tree and is read
 	// from the assembly, materialized from this repository's history. It
 	// publishes exactly like one in the tree; the flag is for the report and
@@ -157,6 +168,13 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 		}
 	}
 
+	// Every message carries the creator as a field, so nothing can be batched
+	// without knowing which address will sign. It is also what decides whether
+	// the canonical paths are usable on this chain at all, which has to be
+	// settled before a single path is read: the chain is asked about where the
+	// packages are GOING, not about where they would go on mainnet.
+	creator, creatorErr := creatorFor(gnokeyCmdOf(fs), key, flagString(fs, "addr"))
+
 	// Follow the imports. Naming one package and being told its dependency is
 	// missing, when that dependency is a directory in the same workspace, is
 	// an answer that makes the user do the tool's job: work out the order,
@@ -211,6 +229,31 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 		inPlan[p.Module] = true
 	}
 
+	// Where each package actually goes on THIS chain. Worked out over every
+	// module this workspace may publish rather than over the plan alone,
+	// because an import has to resolve to the same answer whoever asks: a
+	// package whose path moves and a dependency of it that did not would be an
+	// upload whose imports name nothing.
+	//
+	// Nothing below this line asks the chain about a canonical path. The chain
+	// only ever knows about upload paths, so every State, every batch and every
+	// republish comparison goes through paths.Upload.
+	paths, err := chainPaths(e, chain, flagString(fs, "path"), creator, src.order)
+	if err != nil {
+		return err
+	}
+	if paths.moved() && flagBool(fs, "one-tx-per-package") {
+		// gnokey reads the package directory itself under -pkgdir, so an
+		// unbatched run uploads what is on disk and nothing can hand it the
+		// rewritten imports. Refusing beats sending a package whose
+		// dependencies do not exist on the chain it is going to.
+		return fmt.Errorf("-one-tx-per-package cannot be used where the path moves: "+
+			"%d package(s) would go up under %s, which rewrites their imports, and "+
+			"`gnokey maketx addpkg -pkgdir` would upload the directory as it is on disk.\n"+
+			"  Drop the flag to use transaction documents, or pass -path canonical to publish "+
+			"at the paths the tree carries", paths.count(), short(creator))
+	}
+
 	// One batch, not one round trip per package. Everything the report needs
 	// to know from the chain is known here, before anything is asked, so the
 	// whole set goes up concurrently behind a bar, and whatever the cache
@@ -219,8 +262,10 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	// looks hung.
 	var want []string
 	for _, p := range ordered {
-		want = append(want, p.Module)
-		want = append(want, deps[p.Module]...)
+		want = append(want, paths.Upload(p.Module))
+		for _, d := range deps[p.Module] {
+			want = append(want, paths.Upload(d))
+		}
 	}
 	e.tracef("chain    resolving %d path(s): every package and every import\n", len(want))
 	bar := newProgress(e, "reading "+chain.ID)
@@ -234,22 +279,21 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	sources := newSourceResolver(e, !flagBool(fs, "source"))
 	var plans []plan
 	for _, p := range ordered {
-		files, n, err := Payload(e.Root + "/" + p.Dir)
+		state, err := probe.State(paths.Upload(p.Module))
 		if err != nil {
 			return err
 		}
-		state, err := probe.State(p.Module)
-		if err != nil {
-			return err
-		}
-		pl := plan{pkg: p, state: state, bytes: n, files: files, dep: pulled[p.Module]}
+		pl := plan{pkg: p, upload: paths.Upload(p.Module), state: state, dep: pulled[p.Module]}
 		pin, pinned := src.pin[p.Module]
 		pl.pinned = pinned
-		if err := pl.stampSource(e.Root, sources, pinnedAt(pin, pinned)); err != nil {
+		// Sizing comes last, from the bytes that will actually be sent: gas and
+		// the deposit ceiling are both derived from pl.bytes, so a rewrite made
+		// after sizing is a transaction that asks for less than it is charged.
+		if err := pl.prepareUpload(e.Root, sources, pinnedAt(pin, pinned), paths, domain); err != nil {
 			return err
 		}
 		for _, d := range deps[p.Module] {
-			ds, err := probe.State(d)
+			ds, err := probe.State(paths.Upload(d))
 			if err != nil {
 				return err
 			}
@@ -316,13 +360,6 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 		e.tracef("chain    republish: compared %d live package(s) in %s\n", len(targets), took(start))
 	}
 
-	// Every message carries the creator as a field, so nothing can be batched
-	// without knowing which address will sign. Resolved here rather than at
-	// the point of use so the header can name it on the same line as the key:
-	// the key is what you type, the address is what signs, and reading one
-	// without the other is how the wrong account ends up owning a namespace.
-	creator, creatorErr := creatorFor(gnokeyCmdOf(fs), key, flagString(fs, "addr"))
-
 	// The report goes to stderr, so that under -print stdout carries only the
 	// script and under a real run it carries only the client's own output.
 	// Nothing here is either.
@@ -338,6 +375,7 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	if gnokeyCmd != "gnokey" {
 		e.logf("%s%s\n", e.label("client"), gnokeyCmd)
 	}
+	summarizeMoved(e, paths, plans, domain)
 	if !haveInert {
 		e.tracef("%s%s\n", e.label("note"),
 			e.dim("vm/qinertpaths unavailable: this chain cannot park a submission, so absent really is absent"))
@@ -455,7 +493,7 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	}
 
 	if hd != nil {
-		return emitHandoff(e, fs, hd, probe, key, creator, haveInert)
+		return emitHandoff(e, fs, hd, probe, key, creator, haveInert, plans, paths)
 	}
 	if out == "" && !flagBool(fs, "one-tx-per-package") {
 		// Falling back rather than failing: a publish that works with more
@@ -481,7 +519,7 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 			groups: [][]string{
 				{"maketx", "addpkg"},
 				{"-pkgdir", e.Root + "/" + pl.pkg.Dir},
-				{"-pkgpath", pl.pkg.Module},
+				{"-pkgpath", pl.upload},
 				{"-gas-wanted", strconv.FormatInt(gas, 10)},
 				{"-gas-fee", FeeFor(gas)},
 				{"-max-deposit", strconv.FormatInt(DepositFor(pl.bytes), 10) + "ugnot"},
@@ -508,8 +546,52 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	if err := e.runPublish(cmds); err != nil {
 		return err
 	}
+	return afterBroadcast(e, fs, chain, plans, paths, haveInert)
+}
+
+// afterBroadcast closes the loop a green broadcast leaves open.
+//
+// Two things happen here and neither of them is optional for an unattended
+// run. The chain is read back, because a chain with the inert policy parks a
+// submission and reports success, so what was accepted and what is live are
+// different sets. Then what IS live is written into the tree, as the
+// [[deployment]] rows that say where this version currently runs.
+func afterBroadcast(e *Env, fs *flag.FlagSet, chain *Chain, plans []plan, pm *pathMap, haveInert bool) error {
+	wait := flagDuration(fs, "wait")
+	if wait <= 0 {
+		if haveInert {
+			e.logf("%s%s\n", e.label("note"), e.warn("this chain parks submissions: a green broadcast is NOT live. Re-run gnopm publish to see whether an approver enabled them."))
+		}
+		return nil
+	}
+	sent := uploadedPaths(plans)
 	if haveInert {
-		e.logf("%s%s\n", e.label("note"), e.warn("this chain parks submissions: a green broadcast is NOT live. Re-run gnopm publish to see whether an approver enabled them."))
+		e.logf("%s%s\n", e.label("wait"), e.dim(fmt.Sprintf(
+			"this chain parks submissions, so a green broadcast is not live: reading %d path(s) back, up to %s", len(sent), wait)))
+	}
+	start := time.Now()
+	live, err := confirmLive(e, chain, sent, wait)
+	if err != nil {
+		return fmt.Errorf("reading %s back after the broadcast: %w", chain.ID, err)
+	}
+	e.logf("%s%s\n", e.label("live"), e.ok(fmt.Sprintf(
+		"%d of %d path(s) live on %s, in %s", len(live), len(sent), chain.ID, took(start))))
+
+	origin := webOrigin(chain, flagString(fs, "web"))
+	for _, u := range liveURLs(origin, plans, live, 3) {
+		e.logf("%s%s\n", e.label(""), e.dim(u))
+	}
+	if !flagBool(fs, "record") {
+		return nil
+	}
+	rev, _ := gitHead(e.Root)
+	n, err := recordDeployments(e, chain.ID, origin, rev, plans, live, flagBool(fs, "keep-deployments"))
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		e.logf("%s%s\n", e.label("record"), fmt.Sprintf(
+			"%d gnomod.toml updated in the tree; commit them", n))
 	}
 	return nil
 }
@@ -602,23 +684,20 @@ func buildHandoff(e *Env, plans []plan, deps map[string][]string, creator, out s
 		return nil, err
 	}
 	gasOf := map[string]int64{}
+	// The chain speaks in upload paths and the report speaks in canonical
+	// ones, so the index that joins them is built where both are in hand.
+	canonical := map[string]string{}
 	h := &handoff{tx: map[string]int{}, layers: len(layers)}
 	for _, layer := range layers {
 		var msgs []AddPackageMsg
 		for _, pl := range layer {
-			msg, err := AddPackageFor(e.Root+"/"+pl.pkg.Dir, pl.pkg.Module, creator, DepositFor(pl.bytes))
+			msg, err := pl.message(e.Root, creator)
 			if err != nil {
 				return nil, err
 			}
-			if pl.gnomod != "" {
-				for i := range msg.Package.Files {
-					if msg.Package.Files[i].Name == "gnomod.toml" {
-						msg.Package.Files[i].Body = pl.gnomod
-					}
-				}
-			}
 			msgs = append(msgs, msg)
-			gasOf[pl.pkg.Module] = gasAtLeast(pl.bytes, minGas)
+			gasOf[pl.upload] = gasAtLeast(pl.bytes, minGas)
+			canonical[pl.upload] = pl.pkg.Module
 		}
 		part, err := batchDocuments(msgs, func(m AddPackageMsg) int64 { return gasOf[m.Package.Path] })
 		if err != nil {
@@ -632,7 +711,7 @@ func buildHandoff(e *Env, plans []plan, deps map[string][]string, creator, out s
 	}
 	for i, d := range h.docs {
 		for _, m := range d.Msgs {
-			h.tx[m.Package.Path] = i + 1
+			h.tx[canonical[m.Package.Path]] = i + 1
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
@@ -647,7 +726,7 @@ func buildHandoff(e *Env, plans []plan, deps map[string][]string, creator, out s
 
 // emitHandoff prints the transaction block and then signs and broadcasts, or
 // prints the commands that would.
-func emitHandoff(e *Env, fs *flag.FlagSet, h *handoff, probe *Probe, key, creator string, haveInert bool) error {
+func emitHandoff(e *Env, fs *flag.FlagSet, h *handoff, probe *Probe, key, creator string, haveInert bool, plans []plan, pm *pathMap) error {
 	chain := probe.Chain()
 
 	// Account number and sequence are covered by the signature, so they belong
@@ -745,11 +824,7 @@ func emitHandoff(e *Env, fs *flag.FlagSet, h *handoff, probe *Probe, key, creato
 	if err := e.runPublish(cmds); err != nil {
 		return err
 	}
-	if haveInert {
-		e.logf("%s%s\n", e.label("note"),
-			e.warn("this chain parks submissions: a green broadcast is NOT live. Re-run gnopm publish to see whether an approver enabled them."))
-	}
-	return nil
+	return afterBroadcast(e, fs, chain, plans, pm, haveInert)
 }
 
 // gnokeyCmdOf is the client to name in an emitted command: a wrapper that adds
@@ -761,12 +836,6 @@ func gnokeyCmdOf(fs *flag.FlagSet) string {
 	return "gnokey"
 }
 
-// stampSource works out the gnomod.toml this package uploads, and moves the
-// byte count with it.
-//
-// The count matters more than it looks: gas and the storage-deposit ceiling are
-// both sized from pl.bytes, so a section added after sizing is a transaction
-// that asks for less than it is charged.
 // pinnedAt is the pin to stamp, or nil when the package is in the working tree
 // and git itself is the answer.
 func pinnedAt(en LockEntry, pinned bool) *Source {
@@ -777,34 +846,104 @@ func pinnedAt(en LockEntry, pinned bool) *Source {
 	return &s
 }
 
-func (pl *plan) stampSource(root string, r *sourceResolver, pin *Source) error {
-	path := filepath.Join(root, filepath.FromSlash(pl.pkg.Dir), "gnomod.toml")
-	b, err := os.ReadFile(path)
+// prepareUpload works out the exact bytes this package uploads, which are not
+// always the bytes on disk, and sizes the transaction from them.
+//
+// Three edits are made to the copy and none of them touches the tree:
+//
+//   - gnomod.toml loses its [[deployment]] rows. Unconditionally, on every
+//     chain: a row is a statement about some OTHER chain, and useless to the
+//     one being written to (deployment.go, moul/gno-meta#823).
+//   - gnomod.toml gains a [source] table, when the repository is one that may
+//     be named (source.go).
+//   - When the path moves, gnomod.toml's module line and every intra-workspace
+//     import in every .gno file are rewritten to the upload paths
+//     (chainpath.go). Imports of anything outside this workspace are left
+//     alone: they exist on the target chain under their real paths already.
+//
+// The byte count matters more than it looks. Gas and the storage-deposit
+// ceiling are both sized from pl.bytes, so an edit made after sizing is a
+// transaction that asks for less than it is charged. That is why this replaced
+// a Payload() call followed by a separate stamping pass: there is one read of
+// the directory, and the count is taken from what came out of it.
+func (pl *plan) prepareUpload(root string, r *sourceResolver, pin *Source, pm *pathMap, domain string) error {
+	dir := filepath.Join(root, filepath.FromSlash(pl.pkg.Dir))
+	raw, err := payloadFiles(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
+		return err
+	}
+	if pl.upload == "" {
+		pl.upload = pl.pkg.Module
+	}
+	moved := pl.upload != pl.pkg.Module
+	outside := map[string]bool{}
+	files := make([]UploadFile, 0, len(raw))
+	total := 0
+	for _, f := range raw {
+		b, err := os.ReadFile(f.Path)
+		if err != nil {
+			return err
 		}
-		return err
-	}
-	disk := string(b)
-	s, err := r.section(pl.pkg.Dir, disk, pin)
-	if err != nil {
-		return err
-	}
-	body, err := withSource(disk, s)
-	if err != nil {
-		return err
-	}
-	if body == disk {
-		return nil
-	}
-	pl.gnomod = body
-	delta := len(body) - len(disk)
-	pl.bytes += delta
-	for i := range pl.files {
-		if pl.files[i].Name == "gnomod.toml" {
-			pl.files[i].Size += delta
+		disk := string(b)
+		body := disk
+		switch {
+		case f.Name == "gnomod.toml":
+			if body, err = withoutDeployments(body); err != nil {
+				return fmt.Errorf("%s/gnomod.toml: %w", pl.pkg.Dir, err)
+			}
+			if moved {
+				body = withModule(body, pl.upload)
+			}
+			sec, err := r.section(pl.pkg.Dir, body, pin)
+			if err != nil {
+				return err
+			}
+			if body, err = withSource(body, sec); err != nil {
+				return err
+			}
+		case moved && strings.HasSuffix(f.Name, ".gno"):
+			body = rewriteImports(body, domain, pm.Upload)
+			for _, q := range outsideImports(disk, domain, func(path string) bool { return pm.Upload(path) != path }) {
+				outside[q] = true
+			}
 		}
+		if body != disk {
+			if pl.bodies == nil {
+				pl.bodies = map[string]string{}
+			}
+			pl.bodies[f.Name] = body
+		}
+		files = append(files, UploadFile{Name: f.Name, Size: len(body)})
+		total += len(body) + len(f.Name)
 	}
+	for q := range outside {
+		pl.outside = append(pl.outside, q)
+	}
+	sort.Strings(pl.outside)
+	// Biggest first, because the report's job is to say what dominates the
+	// cost. Same order Payload returns, and for the same reason.
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].Size != files[j].Size {
+			return files[i].Size > files[j].Size
+		}
+		return files[i].Name < files[j].Name
+	})
+	pl.files, pl.bytes = files, total
 	return nil
+}
+
+// message is this package's MsgAddPackage: the directory as the toolchain
+// reads it, sent to the path it actually goes to, with every file gnopm edited
+// on the way out swapped in.
+func (pl *plan) message(root, creator string) (AddPackageMsg, error) {
+	msg, err := AddPackageFor(root+"/"+pl.pkg.Dir, pl.upload, creator, DepositFor(pl.bytes))
+	if err != nil {
+		return AddPackageMsg{}, err
+	}
+	for i := range msg.Package.Files {
+		if b, ok := pl.bodies[msg.Package.Files[i].Name]; ok {
+			msg.Package.Files[i].Body = b
+		}
+	}
+	return msg, nil
 }

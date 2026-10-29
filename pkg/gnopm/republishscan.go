@@ -79,7 +79,7 @@ func (s *republishScanner) scan(targets []*plan) error {
 				if stop {
 					continue // drain, so the producer is never left blocked
 				}
-				chk, err := s.check(pl.pkg)
+				chk, err := s.check(pl.pkg, pl.upload, pl.bodies)
 				if err != nil {
 					errMu.Lock()
 					if firstErr == nil {

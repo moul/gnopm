@@ -490,6 +490,111 @@ Nothing to commit, so nothing to go stale. The rules:
 or no revision. A chain that does not know the section yet stores the package
 without it.
 
+### A different path on a different chain: `-path` and `[[deployment]]`
+
+A gno package path **is** its authorization. `r/sys/names` grants `add_package`
+under exactly two shapes: the namespace literal equals the signer's own address,
+or `r/sys/users` resolves the namespace to the signer and it is that user's
+current name. One address, no list, no delegation.
+
+So `gno.land/r/moul/zones/v0` can only ever be sent by the key that owns `moul`
+on that chain, and no other key can rehearse a workspace on a testnet under the
+paths it will carry on mainnet. The chain refuses the transaction.
+
+The canonical path stays in the tree. Where the signer may not use that
+namespace, the **upload** goes under the signer's own address path, which needs
+no registration anywhere:
+
+| | |
+|---|---|
+| mainnet, the name | `gno.land/r/moul/zones/v0` |
+| onyx, the rehearsal | `gno.land/r/g1magld5…/zones/v0` |
+
+**The imports move with it.** An import names another package by path, so a
+package that moved while its imports did not is a package whose dependencies do
+not exist on the target chain. `publish` rewrites, in the uploaded copy only,
+the `module` line of `gnomod.toml` and every import naming a package this run is
+moving. Imports of anything outside the workspace are left exactly alone: they
+are live on the target chain under their real paths.
+
+`-path` picks the policy, and the default asks the chain rather than guessing:
+
+| `-path` | |
+|---|---|
+| `auto` (default) | ask `r/sys/names` itself, once per namespace, and move only what it says this signer may not use. On mainnet with the owner's key, nothing moves. A chain that will not answer is left alone. |
+| `canonical` | never move. The chain refuses the transaction, which is sometimes exactly what you want to see. |
+| `address` | move everything not already under the signer's address, without asking. |
+
+Nothing outside an import declaration is rewritten, and that is a decision. A
+quoted path in ordinary code is a `txlink` target, a `PkgPath()` comparison or a
+prefix constant, and editing one would be a textual change to program logic.
+Those are **reported by name** instead, so the gap is something you read rather
+than something you discover on chain.
+
+#### Why not a replace directive, or a chain-side alias
+
+Both were checked, against gno master, before any of this was written.
+
+- `gnomod.toml` **has** a replace directive, `[[replace]]` with `old` and `new`,
+  and a resolver behind it. It is refused on chain:
+  `checkGnomodConstraints` opens with `if gm.HasReplaces() { return
+  ErrInvalidPackage("development packages are not allowed") }`, on all three
+  paths that admit a package. It is a local-toolchain device.
+- **There is no path aliasing.** `checkNamespacePermission` matches the literal
+  third element of the path, and the VM resolves an import by its literal string
+  against the store.
+- `gnosmoke` rewrites the module line and nothing else, which is sufficient
+  there because a scenario is one self-contained package with no intra-workspace
+  imports, and is not sufficient for a workspace with a dependency graph.
+
+#### `[[deployment]]`, the mirror of `[source]`
+
+Where a path moves, the tree records where it landed
+([moul/gno-meta#823](https://github.com/moul/gno-meta/issues/823)):
+
+```toml
+[[deployment]]
+  chain = "onyx-1"
+  path = "gno.land/r/g1magld5…/zones/v0"
+  url = "https://onyx.testnets.gno.land/r/g1magld5…/zones/v0"
+  revision = "bf382ccb1a0f…"
+  at = "2026-10-29T09:41:02Z"
+```
+
+The symmetry with `[source]` is the design, not a coincidence:
+
+| | written into |
+|---|---|
+| `[source]` | the **upload**, never the tree. A revision committed to the tree is stale one commit later. |
+| `[[deployment]]` | the **tree**, never the upload. A testnet URL is useless to the chain that would store it, and it is the only thing a reader of the repository wants. |
+
+A row is stripped from every upload, unconditionally, on every chain. One row
+per chain: a package is at one path on one chain. On a successful publish at the
+**canonical** path, that chain's rows are dropped from the tree, because the
+rehearsal is over and a stale testnet URL is worse than none; `-keep-deployments`
+opts out.
+
+The rows are also the **mapping**. `verify -deployed` holds no key, so it cannot
+ask "may this signer use `moul`" the way `publish` can. It reads the rows,
+queries the recorded path, and applies the same rewrite to the tree's copy before
+comparing, so a package rehearsed under an address path verifies clean and a real
+source change still shows as drift. The republish comparison inside `publish`
+does the same thing with the map it already has: what it compares is what it
+*would send*, against what the chain holds at the path it was sent to.
+
+gno's own parser ignores the table, so a tree carrying these rows parses exactly
+as before. `gno mod tidy` re-encodes from its struct and would drop them, which
+is the real cost of putting this in `gnomod.toml` rather than beside it, and the
+reason gnopm edits that file as lines rather than through gno's encoder.
+
+#### Reading back what actually went live
+
+A green broadcast is not a deploy. A chain running `code_submission_policy =
+"inert"` stores the submission and returns success without making it live; an
+approver enables it a block or two later. `-wait` (90s by default, `0` to skip)
+polls the uploaded paths until they are live and reports **that** number, not the
+number accepted, and it is what the `[[deployment]]` rows are written from.
+
 ### The cache
 
 Asking a chain about two hundred packages is two hundred round trips, so the
