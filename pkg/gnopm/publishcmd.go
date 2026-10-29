@@ -543,10 +543,15 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 	}
 
 	e.logf("%s%s\n", e.label("sign"), fmt.Sprintf("%d %s prompt(s); %s", len(cmds), gnokeyCmd, e.dim("-print writes the commands out instead")))
-	if err := e.runPublish(cmds); err != nil {
-		return err
+	err = e.runPublish(cmds)
+	wait := flagDuration(fs, "wait")
+	if err != nil {
+		wait = 0
 	}
-	return afterBroadcast(e, fs, chain, plans, paths, haveInert)
+	if rerr := afterBroadcast(e, fs, chain, plans, paths, haveInert, wait); rerr != nil && err == nil {
+		err = rerr
+	}
+	return err
 }
 
 // afterBroadcast closes the loop a green broadcast leaves open.
@@ -556,16 +561,15 @@ func cmdPublish(e *Env, fs *flag.FlagSet, args []string) error {
 // submission and reports success, so what was accepted and what is live are
 // different sets. Then what IS live is written into the tree, as the
 // [[deployment]] rows that say where this version currently runs.
-func afterBroadcast(e *Env, fs *flag.FlagSet, chain *Chain, plans []plan, pm *pathMap, haveInert bool) error {
-	wait := flagDuration(fs, "wait")
+func afterBroadcast(e *Env, fs *flag.FlagSet, chain *Chain, plans []plan, pm *pathMap, haveInert bool, wait time.Duration) error {
+	sent := uploadedPaths(plans)
 	if wait <= 0 {
+		// One round and no waiting: either -wait 0, or the run is on its way
+		// out and the only question left is what is live right now.
 		if haveInert {
 			e.logf("%s%s\n", e.label("note"), e.warn("this chain parks submissions: a green broadcast is NOT live. Re-run gnopm publish to see whether an approver enabled them."))
 		}
-		return nil
-	}
-	sent := uploadedPaths(plans)
-	if haveInert {
+	} else if haveInert {
 		e.logf("%s%s\n", e.label("wait"), e.dim(fmt.Sprintf(
 			"this chain parks submissions, so a green broadcast is not live: reading %d path(s) back, up to %s", len(sent), wait)))
 	}
@@ -574,8 +578,10 @@ func afterBroadcast(e *Env, fs *flag.FlagSet, chain *Chain, plans []plan, pm *pa
 	if err != nil {
 		return fmt.Errorf("reading %s back after the broadcast: %w", chain.ID, err)
 	}
-	e.logf("%s%s\n", e.label("live"), e.ok(fmt.Sprintf(
-		"%d of %d path(s) live on %s, in %s", len(live), len(sent), chain.ID, took(start))))
+	if len(sent) > 0 {
+		e.logf("%s%s\n", e.label("live"), e.ok(fmt.Sprintf(
+			"%d of %d path(s) live on %s, in %s", len(live), len(sent), chain.ID, took(start))))
+	}
 
 	// The chain already told us about these, before anything was sent: they are
 	// at a moved path and live, which on a workspace this size usually means an
@@ -831,10 +837,20 @@ func emitHandoff(e *Env, fs *flag.FlagSet, h *handoff, probe *Probe, key, creato
 	// copy-paste that can go stale between the read and the paste.
 	e.logf("%s%s\n", e.label("sign"),
 		fmt.Sprintf("%d %s prompt(s); %s", len(h.docs), gnokeyCmdOf(fs), e.dim("-print writes the commands out instead")))
-	if err := e.runPublish(cmds); err != nil {
-		return err
+	err := e.runPublish(cmds)
+	// Even when the run stopped. Something was broadcast before it did, some of
+	// it is live, and the tree is the only place that record can live: a run
+	// that writes nothing because it did not reach the end loses the record for
+	// everything it DID land. The budget drops to one round on the way out,
+	// because a stopping run has nothing to wait for.
+	wait := flagDuration(fs, "wait")
+	if err != nil {
+		wait = 0
 	}
-	return afterBroadcast(e, fs, chain, plans, pm, haveInert)
+	if rerr := afterBroadcast(e, fs, chain, plans, pm, haveInert, wait); rerr != nil && err == nil {
+		err = rerr
+	}
+	return err
 }
 
 // settleAfter is what a broadcast waits for before the NEXT document is

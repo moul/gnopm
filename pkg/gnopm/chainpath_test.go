@@ -479,3 +479,36 @@ func TestConfirmLiveAsksPerNamespaceNotPerPackage(t *testing.T) {
 		t.Errorf("%d quer(ies) for %d package(s); want one per namespace", n, len(paths))
 	}
 }
+
+// A run that stops part way still writes down what it landed.
+//
+// Something was broadcast before it stopped and some of it is live, and the
+// tree is the only place that record can live. Writing nothing because the run
+// did not reach the end loses the record for everything it DID land, which on
+// a chain whose approver works a queue is most of a session's work.
+func TestPublishRecordsWhatItLandedBeforeItStopped(t *testing.T) {
+	root := chainRepo(t) // app imports lib imports base: three transactions
+	f := newFakeChain(t)
+	f.namesEnabled = true
+
+	// The third invocation is the sign of tx2, so tx1 was broadcast and
+	// enabled and nothing after it was.
+	_, report, err := publishRun(t, root, f, 3, "-addr", agentAddr, "-key", "agent",
+		"-web", "https://onyx.example", "-wait", "1s")
+	if err == nil {
+		t.Fatalf("the failing client did not stop the run:\n%s", report)
+	}
+
+	body := readFile(t, filepath.Join(root, "p/moul/base/gnomod.toml"))
+	d, ok := deployedAt(body, "test-1")
+	if !ok {
+		t.Fatalf("the package that went live before the run stopped has no row:\n%s", body)
+	}
+	if d.Path != "gno.land/p/"+agentAddr+"/base/v0" {
+		t.Errorf("row path = %q", d.Path)
+	}
+	// And nothing is claimed for what never went up.
+	if _, ok := deployedAt(readFile(t, filepath.Join(root, "r/moul/app/gnomod.toml")), "test-1"); ok {
+		t.Error("a package that was never broadcast was recorded as deployed")
+	}
+}

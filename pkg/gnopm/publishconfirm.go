@@ -38,9 +38,11 @@ const confirmInterval = 3 * time.Second
 // the answer has just changed.
 func confirmLive(e *Env, c *Chain, paths []string, wait time.Duration) (map[string]bool, error) {
 	live := map[string]bool{}
-	if len(paths) == 0 || wait <= 0 {
+	if len(paths) == 0 {
 		return live, nil
 	}
+	// wait <= 0 is one round and no waiting, which is what a run on its way out
+	// asks for: it still has to know what is live before it writes the record.
 	deadline := time.Now().Add(wait)
 	for {
 		var todo []string
