@@ -115,6 +115,7 @@ func TestWithModuleRewritesOnlyTheModuleLine(t *testing.T) {
 // that is the same every time.
 func TestChainPathsAsksTheChainOncePerNamespace(t *testing.T) {
 	f := newFakeChain(t)
+	f.namesEnabled = true
 	f.owners["alice"] = "g1alice"
 	e := probeEnv(t)
 	c := &Chain{RPC: f.srv.URL, ID: "test-1"}
@@ -145,6 +146,7 @@ func TestChainPathsAsksTheChainOncePerNamespace(t *testing.T) {
 // nothing downstream can tell this code is there. This is mainnet.
 func TestChainPathsLeavesTheOwnerAlone(t *testing.T) {
 	f := newFakeChain(t)
+	f.namesEnabled = true
 	f.owners["moul"] = "g1manfred47kzduec920z88wfr64ylksmdcedlf5"
 	e := probeEnv(t)
 	c := &Chain{RPC: f.srv.URL, ID: "test-1"}
@@ -204,6 +206,7 @@ func TestPublishMovesAPathAndItsImports(t *testing.T) {
 	mustRun(t, root, "sync")
 
 	f := newFakeChain(t)
+	f.namesEnabled = true
 	f.live["gno.land/p/nt/avl"] = true
 	out := filepath.Join(t.TempDir(), "tx.json")
 	mustRun(t, root, "publish", "-print", "-rpc", f.srv.URL, "-chainid", "test-1",
@@ -244,6 +247,7 @@ func TestPublishRefusesOneTxPerPackageWhereThePathMoves(t *testing.T) {
 	mustRun(t, root, "sync")
 
 	f := newFakeChain(t)
+	f.namesEnabled = true
 	err := Run([]string{"publish", "-C", root, "-print", "-rpc", f.srv.URL, "-chainid", "test-1",
 		"-key", "agent", "-addr", agentAddr, "-one-tx-per-package"}, os.Stderr, os.Stderr)
 	if err == nil || !strings.Contains(err.Error(), "-one-tx-per-package cannot be used where the path moves") {
@@ -260,6 +264,7 @@ func TestPublishCanonicalModeMovesNothing(t *testing.T) {
 	mustRun(t, root, "sync")
 
 	f := newFakeChain(t)
+	f.namesEnabled = true
 	out := filepath.Join(t.TempDir(), "tx.json")
 	mustRun(t, root, "publish", "-print", "-rpc", f.srv.URL, "-chainid", "test-1",
 		"-key", "agent", "-addr", agentAddr, "-path", "canonical", "-o", out)
@@ -368,5 +373,30 @@ func TestVerifyDeployedReadsTheDeploymentRow(t *testing.T) {
 	}
 	if !strings.Contains(out, "deployed under a different path") {
 		t.Errorf("the run was silent about the mapping it used:\n%s", out)
+	}
+}
+
+// A chain that parks submissions does not make a package importable when the
+// transaction commits, and add_package type-checks its imports against the
+// store. So a layer that is still parked stops the run before the next
+// document is signed, rather than sending a transaction that cannot pass its
+// type check and being charged for it.
+func TestPublishWaitsForAParkedLayerBeforeSigningTheNext(t *testing.T) {
+	root := chainRepo(t) // app imports lib imports base: three layers
+	f := newFakeChain(t)
+	// The approver never comes: the fake client reports a successful
+	// broadcast and nothing ever becomes live, which is exactly the shape of
+	// an inert chain whose approver has not got to it.
+
+	ran, report, err := publishRun(t, root, f, 0, "-addr", agentAddr, "-key", "agent", "-wait", "1s")
+	if err == nil {
+		t.Fatalf("the run carried on past a parked layer:\n%s", report)
+	}
+	if !strings.Contains(err.Error(), "still parked") || !strings.Contains(err.Error(), "type check") {
+		t.Errorf("err = %v, want it to say why nothing more was sent", err)
+	}
+	// sign and broadcast of the FIRST document, and nothing after it.
+	if len(ran) != 2 {
+		t.Errorf("%d client invocation(s), want the first sign and broadcast only: %v", len(ran), ran)
 	}
 }

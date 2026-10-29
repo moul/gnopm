@@ -800,6 +800,7 @@ func emitHandoff(e *Env, fs *flag.FlagSet, h *handoff, probe *Probe, key, creato
 				short:  "broadcast " + base,
 				name:   gnokeyCmdOf(fs),
 				groups: [][]string{{"broadcast"}, {"-remote", chain.RPC}, {p}},
+				then:   settleAfter(e, chain, h, i, haveInert, flagDuration(fs, "wait")),
 			},
 		)
 	}
@@ -825,6 +826,59 @@ func emitHandoff(e *Env, fs *flag.FlagSet, h *handoff, probe *Probe, key, creato
 		return err
 	}
 	return afterBroadcast(e, fs, chain, plans, pm, haveInert)
+}
+
+// settleAfter is what a broadcast waits for before the NEXT document is
+// signed, and it is not politeness.
+//
+// add_package TYPE-CHECKS a package's imports against the store, and a package
+// the chain has PARKED is not in the store. The dependency layering puts an
+// import in an earlier transaction, which is necessary and not sufficient:
+// `gnokey broadcast` returns when the transaction is committed, and on a chain
+// with the inert policy an approver needs another block or two after that
+// before the packages it carried are importable. Measured on onyx-1 at ~3.5s a
+// block, that is 3 to 7 seconds in which gnopm would otherwise sign and send a
+// transaction whose imports do not exist, and be charged for the failure.
+//
+// Nothing to wait for on a chain that does not park: the packages are live the
+// moment the transaction commits, so this returns nil and costs nothing. The
+// last document has nothing after it either; afterBroadcast reads it back.
+func settleAfter(e *Env, chain *Chain, h *handoff, i int, haveInert bool, wait time.Duration) func() error {
+	if !haveInert || wait <= 0 || i >= len(h.docs)-1 {
+		return nil
+	}
+	return func() error {
+		var want []string
+		for _, m := range h.docs[i].Msgs {
+			want = append(want, m.Package.Path)
+		}
+		start := time.Now()
+		e.logf("%s%s\n", e.label("wait"), e.dim(fmt.Sprintf(
+			"tx%d parked %d package(s); the next transaction imports them, so waiting for an approver",
+			i+1, len(want))))
+		live, err := confirmLive(e, chain, want, wait)
+		if err != nil {
+			return fmt.Errorf("reading %s back after tx%d: %w", chain.ID, i+1, err)
+		}
+		if len(live) < len(want) {
+			// Stopping here beats signing the next one. A package whose
+			// imports are not live fails the type check, and the fee is
+			// charged either way.
+			var missing []string
+			for _, p := range want {
+				if !live[p] {
+					missing = append(missing, p)
+				}
+			}
+			sort.Strings(missing)
+			return fmt.Errorf("tx%d went through but %d of its %d package(s) are still parked after %s: %s.\n"+
+				"  The next transaction imports them and would fail its type check, so nothing more was sent.\n"+
+				"  Re-run `gnopm publish` once an approver has enabled them",
+				i+1, len(missing), len(want), wait, strings.Join(missing[:min(len(missing), 3)], ", "))
+		}
+		e.logf("%s%s\n", e.label("live"), e.ok(fmt.Sprintf("tx%d: %d package(s) live in %s", i+1, len(live), took(start))))
+		return nil
+	}
 }
 
 // gnokeyCmdOf is the client to name in an emitted command: a wrapper that adds

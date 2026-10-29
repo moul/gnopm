@@ -50,10 +50,16 @@ type fakeChain struct {
 	// the error a chain without that query gives, which is the fallback the
 	// republish scan has to keep working through.
 	storage map[string]string
+	// namesEnabled mirrors r/sys/names.IsEnabled. Default FALSE, which is the
+	// pre-Enable bypass the real verifier opens with ("testing/dev
+	// convenience: bypass everything") and the state every gnodev and txtar
+	// chain is in. So a test that is not about namespaces publishes at the
+	// paths it wrote, exactly as before.
+	namesEnabled bool
 	// owners maps a namespace to the address r/sys/names says may deploy under
-	// it. A namespace with no entry is refused to everyone but the address
-	// that IS the namespace, which is how the real verifier behaves for an
-	// unregistered name.
+	// it, once namesEnabled. A namespace with no entry is refused to everyone
+	// but the address that IS the namespace, which is how the real verifier
+	// behaves for an unregistered name.
 	owners map[string]string
 	// noNames makes vm/qeval unanswerable, which is the chain gnopm must leave
 	// the paths alone on rather than guess about.
@@ -144,7 +150,7 @@ func newFakeChain(t *testing.T) *fakeChain {
 			f.evals++
 			owner, known := f.owners[ns]
 			f.mu.Unlock()
-			allowed := ns == addr || (known && owner == addr)
+			allowed := !f.namesEnabled || ns == addr || (known && owner == addr)
 			writeABCIData(w, fmt.Sprintf("(%t bool)", allowed))
 		case "vm/qinertpaths":
 			if f.noInert {
