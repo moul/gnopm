@@ -1,10 +1,12 @@
 package gnopm
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const agentAddr = "g1magld5ptgzaktqcexxq0pgq5lmdf0kz6re8hlv"
@@ -441,5 +443,37 @@ func TestPublishRecordsAPathAnEarlierRunLanded(t *testing.T) {
 	// the record is of what RUNS, and nothing here proved that it does.
 	if _, ok := deployedAt(readFile(t, filepath.Join(root, "r/moul/app/gnomod.toml")), "test-1"); ok {
 		t.Error("a package that never answered live was recorded as deployed")
+	}
+}
+
+// The confirmation poll costs two queries a round, not one per package.
+//
+// The first version of it asked vm/qfile per path every two seconds. On a
+// 46-package layer that is ~1,400 queries a minute against an endpoint whose
+// ceiling is near 90, and it earned a 429 within minutes and then reported
+// every path as absent -- the one direction this must never be wrong in, since
+// it would stop a publish that was going perfectly well.
+func TestConfirmLiveAsksPerNamespaceNotPerPackage(t *testing.T) {
+	f := newFakeChain(t)
+	var paths []string
+	for i := 0; i < 40; i++ {
+		p := fmt.Sprintf("gno.land/p/%s/pkg%d/v0", agentAddr, i)
+		paths = append(paths, p)
+		f.live[p] = true
+	}
+	paths = append(paths, "gno.land/r/"+agentAddr+"/app/v0")
+	f.live["gno.land/r/"+agentAddr+"/app/v0"] = true
+
+	before := f.count()
+	live, err := confirmLive(probeEnv(t), &Chain{RPC: f.srv.URL, ID: "test-1"}, paths, 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(live) != len(paths) {
+		t.Fatalf("%d of %d live, want all", len(live), len(paths))
+	}
+	// Two prefixes, so two queries. Anything near 41 is the per-path form back.
+	if n := f.count() - before; n > 4 {
+		t.Errorf("%d quer(ies) for %d package(s); want one per namespace", n, len(paths))
 	}
 }

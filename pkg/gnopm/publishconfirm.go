@@ -26,9 +26,9 @@ import (
 // the answer is true.
 
 // confirmInterval is how often the poll asks again. Onyx turns a submission
-// around in one to two blocks at ~3.5s, so a second is fast enough to see it
-// and slow enough not to hammer a stranger's node with a 300-path sweep.
-const confirmInterval = 2 * time.Second
+// around in one to two blocks at ~3.5s, so three seconds sees every state
+// change and the round below costs two queries however many packages went up.
+const confirmInterval = 3 * time.Second
 
 // confirmLive polls until every path is live or the deadline passes, and
 // returns the set that is live.
@@ -73,19 +73,69 @@ func confirmLive(e *Env, c *Chain, paths []string, wait time.Duration) (map[stri
 	}
 }
 
-// livePathsNow asks the chain about a set of paths in one concurrent batch,
-// with nothing cached in either direction.
+// livePathsNow asks which of these paths are live, right now, with nothing
+// cached in either direction.
+//
+// ONE vm/qpaths per namespace, not one vm/qfile per path, and the difference is
+// not a micro-optimisation. Everything one publish uploads sits under at most
+// two prefixes, gno.land/p/<signer> and gno.land/r/<signer>, so a round costs
+// two queries whether it is asking about three packages or three hundred.
+//
+// The per-path form was what this did first, and on a 46-package layer polled
+// every two seconds it asked for roughly 1,400 queries a minute against a
+// public endpoint whose measured ceiling is near 90 (see chain.go). It earned a
+// 429 within minutes and then reported every path as absent, which is the one
+// direction this must never be wrong in: it would have stopped a publish that
+// was going perfectly well.
+//
+// The per-path read is kept as the fallback, for a chain with no vm/qpaths and
+// for an answer at the page limit, which cannot be trusted to be complete.
 func livePathsNow(c *Chain, paths []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	byNS := map[string][]string{}
+	var rest []string
+	for _, p := range paths {
+		if ns := namespacePrefix(p); ns != "" {
+			byNS[ns] = append(byNS[ns], p)
+			continue
+		}
+		rest = append(rest, p)
+	}
+	nss := make([]string, 0, len(byNS))
+	for ns := range byNS {
+		nss = append(nss, ns)
+	}
+	sort.Strings(nss)
+	for _, ns := range nss {
+		live, err := queryPaths(c, ns, bulkPathsLimit)
+		if err != nil || len(live) >= bulkPathsLimit {
+			// A truncated page might be missing entries, and a missing entry
+			// reads as not-live, which here would stop the publish.
+			rest = append(rest, byNS[ns]...)
+			continue
+		}
+		set := make(map[string]bool, len(live))
+		for _, q := range live {
+			set[q] = true
+		}
+		for _, p := range byNS[ns] {
+			if set[p] {
+				out[p] = true
+			}
+		}
+	}
+	if len(rest) == 0 {
+		return out, nil
+	}
 	var (
 		mu       sync.Mutex
-		out      = map[string]bool{}
 		firstErr error
 		wg       sync.WaitGroup
 	)
 	work := make(chan string)
 	workers := probeConcurrency
-	if len(paths) < workers {
-		workers = len(paths)
+	if len(rest) < workers {
+		workers = len(rest)
 	}
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
@@ -110,7 +160,7 @@ func livePathsNow(c *Chain, paths []string) (map[string]bool, error) {
 			}
 		}()
 	}
-	for _, p := range paths {
+	for _, p := range rest {
 		work <- p
 	}
 	close(work)
