@@ -113,21 +113,32 @@ func (s *publishSources) ours(root, module string) (Package, bool) {
 	switch {
 	case !dirExists(dir):
 		s.why[module] = fmt.Sprintf("pinned to %s and not materialized: run `gnopm sync`", short(en.Source.Commit))
+	case !assemblyOK(root, dir, en):
+		s.why[module] = fmt.Sprintf("pinned to %s but the copy under %s does not match gnomod.lock: run `gnopm sync`", short(en.Source.Commit), assemblyDir)
 	default:
-		h, err := hashDownloaded(dir)
-		switch {
-		case err != nil:
-			s.why[module] = fmt.Sprintf("pinned to %s and its materialized copy cannot be read (%v): run `gnopm sync`", short(en.Source.Commit), err)
-		case h != en.Hash:
-			s.why[module] = fmt.Sprintf("pinned to %s but the copy under %s does not match gnomod.lock: run `gnopm sync`", short(en.Source.Commit), assemblyDir)
-		default:
-			s.why[module] = ""
-		}
+		s.why[module] = ""
 	}
 	if s.why[module] != "" {
 		return Package{}, false
 	}
 	return p, true
+}
+
+// assemblyOK is the proof, and it is deliberately the SAME one Install writes
+// the assembly under: assemblyMatches hashes the directory over the file list
+// git holds at the pinned commit.
+//
+// It used to be hashDownloaded, which reads only the top level of a directory.
+// That is right for a chain download, which is flat, and wrong for a package
+// extracted from git, which is not: gnomod.lock's hash is computed by
+// hashAtCommit over `git ls-tree -r`, so a package carrying a filetests/
+// subdirectory hashed two different file sets on the two sides and could never
+// match. p/moul/authz/v0 was refused by publish for exactly this, and the
+// message sent the reader to `gnopm sync`, which had already done its job
+// correctly. One proof, in one place, is what makes that unrepresentable.
+func assemblyOK(root, dir string, en LockEntry) bool {
+	ok, _ := assemblyMatches(root, dir, en)
+	return ok
 }
 
 // selectBy is what a pattern names, in lock order.

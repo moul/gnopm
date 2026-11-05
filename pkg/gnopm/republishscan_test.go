@@ -39,7 +39,7 @@ func TestScannerAsksOnceWhetherAPathIsPublic(t *testing.T) {
 	s := scannerFor(t, f, root)
 	pkg := Package{Dir: "r/moul/home", Module: module}
 
-	first, err := s.check(pkg)
+	first, err := s.check(pkg, pkg.Module, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestScannerAsksOnceWhetherAPathIsPublic(t *testing.T) {
 	}
 	after := f.count()
 
-	second, err := s.check(pkg)
+	second, err := s.check(pkg, pkg.Module, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,13 +74,13 @@ func TestScannerReReadsTheSourceOnlyWhenStorageMoved(t *testing.T) {
 	s := scannerFor(t, f, root)
 	pkg := Package{Dir: "r/moul/home", Module: module}
 
-	if _, err := s.check(pkg); err != nil {
+	if _, err := s.check(pkg, pkg.Module, nil); err != nil {
 		t.Fatal(err)
 	}
 	first := f.count()
 
 	// Unchanged storage: one read for the token, and nothing else.
-	if _, err := s.check(pkg); err != nil {
+	if _, err := s.check(pkg, pkg.Module, nil); err != nil {
 		t.Fatal(err)
 	}
 	if n := f.count() - first; n != 1 {
@@ -97,7 +97,7 @@ func TestScannerReReadsTheSourceOnlyWhenStorageMoved(t *testing.T) {
 	f.files[module+"/home.gno"] = "package home\n// somebody redeployed\n"
 	f.mu.Unlock()
 	before := f.count()
-	got, err := s.check(pkg)
+	got, err := s.check(pkg, pkg.Module, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,13 +120,13 @@ func TestScannerStopsAskingAChainThatHasNoStorageQuery(t *testing.T) {
 	s := scannerFor(t, f, root)
 	pkg := Package{Dir: "r/moul/home", Module: module}
 
-	if _, err := s.check(pkg); err != nil {
+	if _, err := s.check(pkg, pkg.Module, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !s.storageOff {
 		t.Fatal("the scanner kept vm/qstorage on after the chain refused it")
 	}
-	got, err := s.check(pkg)
+	got, err := s.check(pkg, pkg.Module, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -239,24 +239,26 @@ func TestStampSourceMovesTheByteCount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pl := plan{pkg: Package{Dir: "r/moul/app", Module: "gno.land/r/moul/app/v0"}, bytes: n, files: files}
-	if err := pl.stampSource(root, newSourceResolver(testEnv(root, &bytes.Buffer{}), false), nil); err != nil {
+	_ = files
+	pl := plan{pkg: Package{Dir: "r/moul/app", Module: "gno.land/r/moul/app/v0"}}
+	if err := pl.prepareUpload(root, newSourceResolver(testEnv(root, &bytes.Buffer{}), false), nil, nil, "gno.land"); err != nil {
 		t.Fatal(err)
 	}
 	disk, err := os.ReadFile(filepath.Join(root, "r/moul/app/gnomod.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	delta := len(pl.gnomod) - len(disk)
+	body := pl.bodies["gnomod.toml"]
+	delta := len(body) - len(disk)
 	if delta <= 0 {
-		t.Fatalf("nothing was stamped: %q", pl.gnomod)
+		t.Fatalf("nothing was stamped: %q", body)
 	}
 	if pl.bytes != n+delta {
 		t.Errorf("bytes %d, want %d: the section is uploaded but not paid for", pl.bytes, n+delta)
 	}
 	for _, f := range pl.files {
-		if f.Name == "gnomod.toml" && f.Size != len(pl.gnomod) {
-			t.Errorf("report says gnomod.toml is %d bytes, it uploads %d", f.Size, len(pl.gnomod))
+		if f.Name == "gnomod.toml" && f.Size != len(body) {
+			t.Errorf("report says gnomod.toml is %d bytes, it uploads %d", f.Size, len(body))
 		}
 	}
 }

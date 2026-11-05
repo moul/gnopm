@@ -225,16 +225,49 @@ func assemblyMatches(root, dest string, e LockEntry) (bool, string) {
 
 // pruneAssembly removes anything under the assembly root that the lock no
 // longer mentions, then drops the directories left empty.
+//
+// It stops at a package's own directory and does NOT walk inside it. What
+// belongs in there is the extraction's business, and it was already proved
+// against gnomod.lock before this runs.
+//
+// Walking in was a real bug and an expensive one to find. The keep set is
+// module paths and their ancestors, so a SUBDIRECTORY of a package matched
+// nothing and was deleted: `gnopm sync` extracted p/moul/authz/v0 correctly
+// from history, proved its hash, and then immediately removed the filetests/
+// directory it had just written. The hash it had proved, and the one publish
+// re-checks, are over the git file list, which includes filetests, so the copy
+// could never match again. The visible symptom was two chains away from the
+// cause: `gnopm publish` refused r/moul/config/v1 with "blocked by
+// p/moul/authz/v0: the copy under .gnopm does not match gnomod.lock: run
+// gnopm sync", naming the command that had just broken it.
+//
+// Every pinned package carrying a subdirectory was unpublishable, and only
+// those, which is why it went unnoticed: filetests/ is the only subdirectory
+// the toolchain uploads and most packages have none.
 func pruneAssembly(asm string, want []LockEntry) (int, error) {
 	if _, err := os.Stat(asm); os.IsNotExist(err) {
 		return 0, nil
 	}
 	keep := make(map[string]bool, len(want))
+	roots := make(map[string]bool, len(want))
 	for _, e := range want {
 		p := filepath.Join(asm, filepath.FromSlash(e.Module))
+		roots[p] = true
 		// Keep the package and every ancestor up to the assembly root.
 		for d := p; strings.HasPrefix(d, asm) && d != asm; d = filepath.Dir(d) {
 			keep[d] = true
+		}
+	}
+	// A module path that is also an ancestor of another module path still has
+	// to be walked, or the package nested under it would never be reached.
+	// Nothing in gno.land/{p,r} is shaped like that today; costing one pass to
+	// not depend on that is cheaper than the bug if it ever is.
+	outer := map[string]bool{}
+	for p := range roots {
+		for d := filepath.Dir(p); strings.HasPrefix(d, asm) && d != asm; d = filepath.Dir(d) {
+			if roots[d] {
+				outer[d] = true
+			}
 		}
 	}
 	var drop []string
@@ -253,6 +286,9 @@ func pruneAssembly(asm string, want []LockEntry) (int, error) {
 		}
 		if !keep[p] {
 			drop = append(drop, p)
+			return filepath.SkipDir
+		}
+		if roots[p] && !outer[p] {
 			return filepath.SkipDir
 		}
 		return nil

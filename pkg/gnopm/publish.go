@@ -313,14 +313,42 @@ func Imports(dir, domain string) ([]string, error) {
 }
 
 // importsIn pulls the domain-prefixed imports out of one source file, reading
-// only the import declaration.
+// only the import declaration. See importRegion for how the bound is drawn.
+func importsIn(src, domain string) []string {
+	_, region := importRegion(src)
+	var out []string
+	for _, l := range region {
+		out = append(out, quotedPaths(l.text, domain)...)
+	}
+	return out
+}
+
+// importLine is one line of an import declaration: where it is in the file,
+// and what it says with its comments taken out.
 //
-// This used to match a quoted domain-prefixed string ANYWHERE in the file, on
-// the reasoning that gnopm does not parse gno and an import inside a comment
+// Both halves are needed by different callers. importsIn reads text, because a
+// path inside a comment is not an import. rewriteImports edits lines[i], the
+// line as written, because an edit has to preserve the comment, the alias and
+// the indentation it found.
+type importLine struct {
+	i    int
+	text string
+}
+
+// importRegion splits src into lines and reports which of them belong to an
+// import declaration.
+//
+// This is the grammar walk importsIn used to do inline, lifted out so that the
+// rewriter in chainpath.go can share it instead of carrying a second copy. The
+// reasoning below is why it is a grammar walk at all and not a scan of the
+// whole file.
+//
+// The scan used to match a quoted domain-prefixed string ANYWHERE in the file,
+// on the reasoning that gnopm does not parse gno and an import inside a comment
 // costs one extra chain read. That reasoning was wrong about the cost. A path
-// that is neither live nor in the workspace does not cost a read, it BLOCKS
-// the package and everything importing it, with a message naming a dependency
-// the package does not have:
+// that is neither live nor in the workspace does not cost a read, it BLOCKS the
+// package and everything importing it, with a message naming a dependency the
+// package does not have:
 //
 //   - gno-contracts#201: a doc comment in p/moul/kit/ui named a realm path
 //     that deversioning had removed, and kit/ui became unpublishable on every
@@ -335,30 +363,31 @@ func Imports(dir, domain string) ([]string, error) {
 // the file: gno puts the import declaration between the package clause and the
 // first other declaration, and nothing after that is an import. Comment lines
 // inside the block are skipped, which is the #201 case.
-func importsIn(src, domain string) []string {
+func importRegion(src string) ([]string, []importLine) {
+	lines := strings.Split(src, "\n")
 	var (
-		out       []string
+		out       []importLine
 		afterPkg  bool
 		inBlock   bool
 		inComment bool
 	)
-	for _, line := range strings.Split(src, "\n") {
+	for i, line := range lines {
 		s := strings.TrimSpace(line)
 
 		// A /* */ comment can hold anything, including the word import.
 		if inComment {
-			if i := strings.Index(s, "*/"); i >= 0 {
+			if j := strings.Index(s, "*/"); j >= 0 {
 				inComment = false
-				s = strings.TrimSpace(s[i+2:])
+				s = strings.TrimSpace(s[j+2:])
 			} else {
 				continue
 			}
 		}
-		if i := strings.Index(s, "/*"); i >= 0 && !strings.Contains(s[:i], `"`) {
-			if j := strings.Index(s[i:], "*/"); j < 0 {
+		if j := strings.Index(s, "/*"); j >= 0 && !strings.Contains(s[:j], `"`) {
+			if k := strings.Index(s[j:], "*/"); k < 0 {
 				inComment = true
 			}
-			s = strings.TrimSpace(s[:i])
+			s = strings.TrimSpace(s[:j])
 		}
 		if s == "" || strings.HasPrefix(s, "//") {
 			continue
@@ -378,9 +407,7 @@ func importsIn(src, domain string) []string {
 				// An import declaration can be followed by another one.
 				continue
 			}
-			if p, ok := importOnLine(s, domain); ok {
-				out = append(out, p)
-			}
+			out = append(out, importLine{i, s})
 			// gofmt would not write `"path")`, but a block that never closes
 			// would make the rest of the file look like imports again, which
 			// is the bug this function exists to remove.
@@ -397,19 +424,17 @@ func importsIn(src, domain string) []string {
 			// closes where it opened.
 			if rest := strings.TrimSpace(s[len("import ("):]); strings.HasSuffix(rest, ")") {
 				inBlock = false
-				out = append(out, quotedPaths(rest, domain)...)
+				out = append(out, importLine{i, rest})
 			}
 		case strings.HasPrefix(s, "import "):
-			if p, ok := importOnLine(s, domain); ok {
-				out = append(out, p)
-			}
+			out = append(out, importLine{i, s})
 		default:
 			// The first declaration that is not an import ends the header,
 			// and with it anything that can be one.
-			return out
+			return lines, out
 		}
 	}
-	return out
+	return lines, out
 }
 
 // quotedPaths pulls every domain-prefixed quoted path out of one line, for the

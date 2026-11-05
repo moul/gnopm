@@ -39,10 +39,13 @@ import "strings"
 
 // normalizeGnomod reduces a gnomod.toml to the lines that both sides can hold.
 //
-// Dropped: blank lines, whole-line comments, and the entire [addpkg] and
-// [source] tables. [source] is the one gnopm itself writes into the uploaded
-// copy and never into the tree (source.go), and its revision moves with every
-// commit: comparing it would make each commit look like a reason to redeploy.
+// Dropped: blank lines, whole-line comments, and the entire [addpkg], [source]
+// and [[deployment]] tables. [source] is the one gnopm itself writes into the
+// uploaded copy and never into the tree (source.go), and its revision moves
+// with every commit: comparing it would make each commit look like a reason to
+// redeploy. [[deployment]] is its mirror, tree-only and stripped from every
+// upload (deployment.go), so the chain can never hold one and a tree that
+// carries one must not read as drifted for it.
 // Kept, with surrounding whitespace trimmed: everything else, in order.
 //
 // Inline trailing comments are deliberately NOT stripped. Doing it correctly
@@ -63,7 +66,7 @@ func normalizeGnomod(body string) string {
 		// is skipped up to the NEXT header rather than to the end of the file:
 		// a manifest may legitimately carry a table after it.
 		if strings.HasPrefix(t, "[") && strings.HasSuffix(t, "]") {
-			skipping = t == "[addpkg]" || t == "[source]"
+			skipping = t == "[addpkg]" || t == "[source]" || t == "[[deployment]]"
 			if skipping {
 				continue
 			}

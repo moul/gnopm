@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // Proving that what is deployed is what is committed.
@@ -29,13 +30,17 @@ import (
 // deployedResult is one package's verdict.
 type deployedResult struct {
 	Module string
+	// Path is where the package actually is on this chain, which is Module
+	// unless a [[deployment]] row says otherwise. See deployedPaths.
+	Path string
 	// State is what the chain says about the path at all.
 	State PackageState
 	// Match is whether the deployed bytes equal the committed ones. Only
 	// meaningful when State is StateLive.
 	Match bool
-	// Tree and Chain are the two hashes, for the report when they differ.
-	Tree, Chain string
+	// Changed names the files that differ, which is the whole content of a
+	// "no": a hash pair says that something moved and never what.
+	Changed []string
 }
 
 // hashPayload hashes exactly what `addpkg -pkgdir <dir>` would upload.
@@ -105,8 +110,35 @@ func VerifyDeployed(e *Env, rpc, chainID string) error {
 	chain := probe.Chain()
 	e.logf("chain        %s (%s)\n", chain.ID, chain.RPC)
 
+	// Where each package actually is on THIS chain.
+	//
+	// It is not always the path in the tree. On a chain where the publisher
+	// could not use the namespace, the upload went under their address and the
+	// publish recorded the result as a [[deployment]] row (deployment.go). This
+	// command holds no key, so it cannot work the mapping out for itself the
+	// way publish does: the rows ARE the mapping, which is the third reason
+	// they exist.
+	//
+	// Without this, every package rehearsed on a testnet answers "absent" here
+	// forever, and every one that did resolve would compare the tree's imports
+	// against the rewritten ones and read as drifted. Both are reported
+	// failures for a deploy that is exactly right.
+	moved := deployedPaths(e.Root, pkgs, chain.ID)
+	pm := &pathMap{to: moved}
+	domain := tree[0]
+	if i := strings.IndexByte(domain, '/'); i >= 0 {
+		domain = domain[:i]
+	}
+	if len(moved) > 0 {
+		e.logf("paths        %d package(s) are deployed under a different path here, per gnomod.toml\n", len(moved))
+	}
+
+	want := make([]string, 0, len(tree))
+	for _, m := range tree {
+		want = append(want, pm.Upload(m))
+	}
 	bar := newProgress(e, "reading "+chain.ID)
-	err = probe.Warm(tree, bar.step)
+	err = probe.Warm(want, bar.step)
 	bar.stop()
 	if err != nil {
 		return err
@@ -114,25 +146,36 @@ func VerifyDeployed(e *Env, rpc, chainID string) error {
 
 	var results []deployedResult
 	for _, m := range tree {
-		st, err := probe.State(m)
+		upload := pm.Upload(m)
+		st, err := probe.State(upload)
 		if err != nil {
 			return err
 		}
-		r := deployedResult{Module: m, State: st}
+		r := deployedResult{Module: m, Path: upload, State: st}
 		if st == StateLive {
 			// The source, not the state. This is the query the whole command
 			// exists for and the only one that costs real bytes, so it runs
 			// only for what is actually live.
-			got, err := fetchPackage(chain, m)
+			got, err := chainSource(chain, upload)
 			if err != nil {
-				return fmt.Errorf("reading %s back from %s: %w", m, chain.ID, err)
+				return fmt.Errorf("reading %s back from %s: %w", upload, chain.ID, err)
 			}
-			want, err := hashPayload(filepath.Join(e.Root, filepath.FromSlash(dirOf[m])))
+			local, err := localSource(filepath.Join(e.Root, filepath.FromSlash(dirOf[m])))
 			if err != nil {
 				return err
 			}
-			r.Chain, r.Tree = got.Hash, want
-			r.Match = got.Hash == want
+			for name, body := range local {
+				local[name] = pm.rewriteBody(name, body, upload, domain)
+			}
+			// diffSource, not a pair of raw hashes. The chain REWRITES
+			// gnomod.toml rather than storing what it was sent -- it drops the
+			// comments and appends an [addpkg] table it authors itself -- so a
+			// byte comparison of that one file reports every package as
+			// differing forever, including one deployed a minute ago. See
+			// gnomodnorm.go, where the same mistake was found and fixed for
+			// the republish check.
+			r.Changed = diffSource(local, got)
+			r.Match = len(r.Changed) == 0
 		}
 		results = append(results, r)
 	}
@@ -149,8 +192,12 @@ func VerifyDeployed(e *Env, rpc, chainID string) error {
 				continue
 			}
 			differ++
-			e.logf("differs  %s\n           on %s: %s\n           in the tree: %s\n",
-				r.Module, chain.ID, r.Chain, r.Tree)
+			where := ""
+			if r.Path != r.Module {
+				where = " (deployed at " + r.Path + ")"
+			}
+			e.logf("differs  %s%s\n           %d file(s): %s\n",
+				r.Module, where, len(r.Changed), strings.Join(r.Changed, ", "))
 		case StateParked:
 			parked++
 		default:
