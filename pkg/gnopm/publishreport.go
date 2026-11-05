@@ -48,7 +48,12 @@ type pubLine struct {
 // that is not known yet (the command-list form, or a run that is blocked). A
 // single transaction annotates nothing: the column would repeat "tx1" on every
 // row and say nothing.
-func reportPlans(e *Env, plans []plan, domain string, txOf map[string]int, txCount int) (todo, blocked, live int) {
+//
+// skipping says whether -skip-blocked is on, which changes what a blocked row
+// MEANS and therefore what it has to say: without the flag it is the reason
+// the run is about to refuse, with it the run goes on without the package, so
+// the row has to name itself as work being left out.
+func reportPlans(e *Env, plans []plan, domain string, txOf map[string]int, txCount int, skipping bool) (todo, blocked, live int) {
 	var lines []pubLine
 	for _, pl := range plans {
 		mod := trimDomain(pl.pkg.Module, domain)
@@ -57,6 +62,9 @@ func reportPlans(e *Env, plans []plan, domain string, txOf map[string]int, txCou
 		case len(pl.missing) > 0:
 			blocked++
 			l.glyph, l.color = glyphBlocked, ansiRed
+			if skipping {
+				l.tags = append(l.tags, "SKIPPED, not published")
+			}
 			for _, m := range pl.missing {
 				l.detail = append(l.detail, fmt.Sprintf("blocked by %s: %s", trimDomain(m.module, domain), m.why))
 			}
@@ -164,4 +172,39 @@ func tildePath(p string) string {
 		return "~" + string(filepath.Separator) + rel
 	}
 	return p
+}
+
+// reportSkipped prints, in one block, every package -skip-blocked is leaving
+// out and the dependency that stops it.
+//
+// It repeats what the listing already said on each package's own row, and
+// that repetition is the point: the listing is three hundred lines long in a
+// real workspace, so five red rows somewhere in the middle of it scroll past
+// before anybody reads the plan. Dropping work quietly is worse than refusing
+// it, so the last thing printed before what the run WILL do is what it will
+// not.
+func reportSkipped(e *Env, plans []plan, domain string) int {
+	var lines []pubLine
+	for _, pl := range plans {
+		if len(pl.missing) == 0 {
+			continue
+		}
+		l := pubLine{glyph: glyphBlocked, color: ansiRed, path: trimDomain(pl.pkg.Module, domain)}
+		for _, m := range pl.missing {
+			l.detail = append(l.detail, fmt.Sprintf("needs %s: %s", trimDomain(m.module, domain), m.why))
+		}
+		lines = append(lines, l)
+	}
+	if len(lines) == 0 {
+		return 0
+	}
+	e.logf("\n%s%s\n", e.label("skipped"), e.bad(fmt.Sprintf(
+		"%d package(s) NOT published, plus anything in this workspace that imports them", len(lines))))
+	for _, l := range lines {
+		e.logf("%s%s\n", e.label(""), e.bad(l.glyph+" "+l.path))
+		for _, d := range l.detail {
+			e.logf("%s%s\n", e.label(""), e.dim("    "+d))
+		}
+	}
+	return len(lines)
 }

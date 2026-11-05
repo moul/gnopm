@@ -373,6 +373,7 @@ gnopm publish                # the whole workspace
 gnopm publish r/moul/reaper  # one package, and what it imports from here
 gnopm publish -print         # write the commands out, run nothing
 gnopm publish -o tx.json     # one document, one signature, all of it
+gnopm publish -skip-blocked  # publish what can go up, name what cannot
 ```
 
 <p align="center">
@@ -415,6 +416,32 @@ a realm seeding four records at deploy wanted 444M and used 533M, and ran out
 after its fee was paid. A deploy cannot be simulated unsigned, so gnopm cannot
 measure it either. `-min-gas N` raises every package's `gas_wanted` to at least
 N: deploy to a testnet first, read `GAS USED` there, and pass that with margin.
+
+### When something cannot go up: `-skip-blocked`
+
+A package whose import exists on neither the chain nor this workspace cannot be
+published by anybody, and by default one of them refuses the whole run. That is
+the right default, because a plan that quietly omits a package is how a
+half-deployed workspace happens.
+
+It is the wrong blast radius. On `moul/gno-contracts` against a fresh testnet,
+five packages still importing a `v0` that lives only in mainnet history stopped
+the other 306 from being **planned**, and a plan costs nothing and signs nothing.
+
+```sh
+gnopm publish -skip-blocked -addr g1...   # publish the 306, name the 5, exit 3
+```
+
+Nothing gets quieter. Every skipped package is printed twice, on its own row and
+again in a block before the plan, each naming the dependency that stops it.
+Anything importing a skipped package is skipped too, derived from the graph, so
+the transitive case needs no list to maintain.
+
+The **exit code is 3**, which is the point of the flag having one: `0` means the
+run published everything it was asked to, `1` means it refused and signed
+nothing, and `3` means it published what it could and told you what it did not.
+A script that cannot tell those apart cannot be trusted to deploy. (`2` is left
+alone, because that is conventionally a usage error.)
 
 ### One signature for the whole deploy
 

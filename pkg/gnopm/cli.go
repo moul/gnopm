@@ -573,6 +573,7 @@ at the first failure.
   gnopm publish                       # read the report, then publish
   gnopm publish -print                # write the commands out, run nothing
   gnopm publish -one-tx-per-package   # a transaction each, the unbatched shape
+  gnopm publish -skip-blocked         # publish what can go up, exit 3, name the rest
   gnopm publish -o tx.json            # write the documents somewhere of your own
   gnopm publish -republish moul/home  # replace a live private realm with the tree's copy
   gnopm publish -republish-docs …     # ... even when only the README moved
@@ -639,6 +640,28 @@ version you are about to publish.
                a transaction each, the unbatched shape. What to reach for when
                a layer is too big to review in one document, or when you want a
                failure to stop at exactly one package.
+  -skip-blocked
+               leave the blocked packages out and publish the rest.
+
+               By default one blocked package refuses the whole run, and that
+               is still the default: a plan that quietly omits something is
+               how a half-deployed workspace happens. But the refusal has a
+               blast radius out of proportion to the diagnosis. Five packages
+               importing a version no chain can supply stopped the other 306
+               from being PLANNED, and a plan costs nothing and signs nothing.
+
+               The diagnosis does not get quieter. Every skipped package is
+               printed twice, once on its own row and once in a block of its
+               own before the plan, each naming the dependency that stops it.
+
+               Anything importing a skipped package is skipped too, worked
+               out from the graph rather than from a list, so the transitive
+               case is the same case.
+
+               EXIT CODE 3, not 0 and not 1: the run published what it could
+               and left the rest, which is neither "did everything asked" (0)
+               nor "did nothing" (1). 3 rather than 2 because 2 is
+               conventionally a usage error.
   -addr        the creator address: it is a field of every message, so batching
                cannot start without it. Default: asked of the key list. Without
                it publish still works, one transaction per package.
@@ -703,6 +726,7 @@ version you are about to publish.
 				fs.String("o", "", "write the unsigned transaction documents here instead of the cache")
 				fs.String("addr", "", "the creator address (default: asked of `gnokey list`)")
 				fs.Bool("one-tx-per-package", false, "a transaction each, instead of one per dependency layer")
+				fs.Bool("skip-blocked", false, "publish what can go up, leaving out blocked packages and everything importing them; exits 3")
 				fs.Int("min-gas", 0, "gas_wanted at least this per package: a figure measured on a testnet, for an init() the size estimate cannot see")
 				fs.Bool("republish", false, "also replace a live package whose source has changed, when the chain's copy is private")
 				fs.Bool("republish-docs", false, "with -republish, include a package whose only changes are .md files")
