@@ -222,7 +222,11 @@ func (r *sourceResolver) init() {
 // section returns the [source] table to upload for the package in dir, a
 // workspace-relative directory, given the gnomod.toml body on disk. The zero
 // value means: upload no section.
-func (r *sourceResolver) section(dir, gnomod string) (sourceSection, error) {
+//
+// pin is non-nil for a version pinned to this repository's history, whose dir
+// is the generated assembly rather than a tracked directory. For one of those
+// the lock is the better witness than git is, and the rules below say why.
+func (r *sourceResolver) section(dir, gnomod string, pin *Source) (sourceSection, error) {
 	if r.disabled {
 		return sourceSection{}, nil
 	}
@@ -237,6 +241,34 @@ func (r *sourceResolver) section(dir, gnomod string) (sourceSection, error) {
 	} else if s.Repository == "" {
 		r.e.tracef("source   %s: no [source], %s\n", dir, r.why)
 		return sourceSection{}, nil
+	}
+	if pin != nil {
+		// Rule 3 is suspended here, and that is not a loophole. The dirty
+		// check exists because HEAD does not describe uncommitted bytes; a
+		// pinned version has no uncommitted bytes, because gnomod.lock names
+		// the exact commit the assembly was extracted from and `gnopm sync`
+		// proved the copy hashes to what the lock says. So the revision is
+		// knowable where it would otherwise be withheld, and it is MORE
+		// accurate than HEAD: it points at the commit where this version's
+		// source actually was, not at one where that directory now holds a
+		// newer version, or nothing at all.
+		//
+		// The path comes from the pin for the same reason. Resolving dir
+		// against git would yield .gnopm/gno.land/..., a gitignored directory
+		// that is empty in any fresh clone: a URL on chain pointing at it
+		// would be a lie no redeploy can take back.
+		if s.Path == "" && r.top != "" {
+			abs := filepath.Join(r.e.Root, filepath.FromSlash(pin.Dir))
+			if rel, err := filepath.Rel(r.top, abs); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+				s.Path = filepath.ToSlash(rel)
+			}
+		}
+		s.Revision = pin.Commit
+		if err := s.validate(); err != nil {
+			return sourceSection{}, fmt.Errorf("%s/gnomod.toml: %w", dir, err)
+		}
+		r.e.tracef("source   %s: %s/%s@%s, pinned by %s\n", dir, s.Repository, s.Path, short(s.Revision), lockFile)
+		return s, nil
 	}
 	if r.top == "" {
 		// Declared, but not in a checkout: upload what the author wrote.

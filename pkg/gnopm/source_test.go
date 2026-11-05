@@ -151,7 +151,7 @@ func TestSourceResolver(t *testing.T) {
 				t.Fatal(err)
 			}
 			r := newSourceResolver(testEnv(root, &bytes.Buffer{}), tc.disabled)
-			got, err := r.section("r/moul/app", string(disk))
+			got, err := r.section("r/moul/app", string(disk), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -240,7 +240,7 @@ func TestStampSourceMovesTheByteCount(t *testing.T) {
 		t.Fatal(err)
 	}
 	pl := plan{pkg: Package{Dir: "r/moul/app", Module: "gno.land/r/moul/app/v0"}, bytes: n, files: files}
-	if err := pl.stampSource(root, newSourceResolver(testEnv(root, &bytes.Buffer{}), false)); err != nil {
+	if err := pl.stampSource(root, newSourceResolver(testEnv(root, &bytes.Buffer{}), false), nil); err != nil {
 		t.Fatal(err)
 	}
 	disk, err := os.ReadFile(filepath.Join(root, "r/moul/app/gnomod.toml"))
