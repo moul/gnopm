@@ -87,6 +87,51 @@ func layerPlans(plans []plan, deps map[string][]string) ([][]plan, error) {
 	return layers, nil
 }
 
+// markSkipped propagates a block down the graph, which is what -skip-blocked
+// needs and the default does not: without the flag the run refuses as soon as
+// anything is blocked, so nothing downstream of it is ever asked about.
+//
+// A package whose import is leaving the plan cannot go up either, and saying
+// so needs the IMMEDIATE dependency rather than the root cause: being told
+// "r/moul/x/across/v0 needs r/moul/x/daily/streak/v0, which is skipped" is
+// actionable, being told it needs something three hops away is a puzzle.
+//
+// plans arrive topologically ordered (TopoOrder, then the plans loop walks it
+// in order), so one forward pass sees every dependency already decided. The
+// five packages this was written for are each one hop from their blocker;
+// deriving it from the graph rather than from a list is what makes the sixth
+// one work too.
+func markSkipped(plans []plan, deps map[string][]string) {
+	out := map[string]bool{}
+	for i := range plans {
+		pl := &plans[i]
+		switch {
+		case len(pl.missing) > 0:
+			// Blocked on its own account. A LIVE package reaches this too
+			// (the chain has it, and the tree has since added an import
+			// nothing can satisfy) and that one is not missing from
+			// anywhere: it is already on chain, so nothing importing it has
+			// to wait for this run.
+			if pl.state != StateLive {
+				out[pl.pkg.Module] = true
+			}
+		case !publishes(*pl):
+			// Live, or parked. Live needs nothing; parked is already named
+			// as a blocker by the plans loop, in words of its own that say
+			// to wait rather than to fix anything.
+		default:
+			for _, d := range deps[pl.pkg.Module] {
+				if out[d] {
+					pl.missing = append(pl.missing, depBlock{d, "skipped: it is blocked itself"})
+				}
+			}
+			if len(pl.missing) > 0 {
+				out[pl.pkg.Module] = true
+			}
+		}
+	}
+}
+
 // addrLine matches the address in one `gnokey list` row, whose format is
 // `%d. %s (%s) - addr: %v pub: %v, path: %v` (tm2 list.go).
 var addrLine = regexp.MustCompile(`^\s*\d+\.\s+(\S+)\s+\([^)]*\)\s+-\s+addr:\s+(g1\w+)`)
