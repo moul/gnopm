@@ -33,11 +33,7 @@ import (
 // because the target is by construction a number the chain has never seen.
 func Unbump(e *Env, target string, opts UnbumpOptions) error {
 	root, w := e.Root, e.Errw
-	pkgs, err := scanPackages(root)
-	if err != nil {
-		return err
-	}
-	pkg, err := findTarget(pkgs, target)
+	pkg, err := findOwnTarget(root, target, "unbump")
 	if err != nil {
 		return err
 	}

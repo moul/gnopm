@@ -3,6 +3,7 @@ package gnopm
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -94,6 +95,24 @@ type Package struct {
 	Module string
 	// Ignored mirrors `ignore = true` in gnomod.toml.
 	Ignored bool
+	// GitIgnored marks a package in a directory git ignores. gno resolves it
+	// from the working tree, but no clone has it, so it stays out of the lock.
+	GitIgnored bool
+}
+
+// ignoredBy reports whether the package at dir, root-relative and
+// slash-separated, is ignored according to the set gitIgnored returned: its
+// gnomod.toml is listed, or one of its directories is.
+func ignoredBy(gitignored map[string]bool, dir string) bool {
+	if gitignored[path.Join(dir, "gnomod.toml")] {
+		return true
+	}
+	for d := dir; d != "."; d = path.Dir(d) {
+		if gitignored[d+"/"] {
+			return true
+		}
+	}
+	return false
 }
 
 // FindRoot walks up from dir to the workspace root.
@@ -117,14 +136,38 @@ func FindRoot(dir string) (string, error) {
 	}
 }
 
-// scanPackages finds every gno package in the working tree, keyed by the
-// module path it declares rather than by where it sits.
-//
-// This is a deliberate mirror of what `gno list` does, not a delegation to it.
-// Linking gno's own loader was measured and rejected: see CONTRIBUTING.md,
-// "What gnopm mirrors from gno, and why it does not link it", which also says
-// what would flip that decision.
+// scanPackages finds this repository's packages: every package in the working
+// tree except those in directories git ignores. They are what gnomod.lock
+// describes.
 func scanPackages(root string) ([]Package, error) {
+	all, err := scanResolvable(root)
+	if err != nil {
+		return nil, err
+	}
+	return ownPackages(all), nil
+}
+
+// ownPackages drops the packages git ignores.
+func ownPackages(all []Package) []Package {
+	out := make([]Package, 0, len(all))
+	for _, p := range all {
+		if !p.GitIgnored {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// scanResolvable finds every gno package in the working tree, keyed by the
+// module path it declares rather than by where it sits, and marks the ones git
+// ignores. It answers what gno resolves locally, which includes a copy in an
+// ignored directory, so the checks against two sources for one module use it.
+//
+// The walk is a deliberate mirror of what `gno list` does, not a delegation
+// to it. Linking gno's own loader was measured and rejected: see
+// CONTRIBUTING.md, "What gnopm mirrors from gno, and why it does not link it",
+// which also says what would flip that decision.
+func scanResolvable(root string) ([]Package, error) {
 	var out []Package
 	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -152,6 +195,11 @@ func scanPackages(root string) ([]Package, error) {
 	})
 	if err != nil {
 		return nil, err
+	}
+	if gitignored := gitIgnored(root); len(gitignored) > 0 {
+		for i := range out {
+			out[i].GitIgnored = ignoredBy(gitignored, out[i].Dir)
+		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Module < out[j].Module })
 	seen := make(map[string]string, len(out))

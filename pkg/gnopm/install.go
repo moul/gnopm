@@ -15,18 +15,23 @@ import (
 // is the only layout where a human who opens the directory knows what they are
 // looking at. The toolchain does not care: it reads the module line.
 func Install(e *Env) error {
+	pkgs, err := scanResolvable(e.Root)
+	if err != nil {
+		return err
+	}
+	return install(e, pkgs)
+}
+
+// install is Install over a scan the caller already made.
+func install(e *Env, pkgs []Package) error {
 	root := e.Root
 	lock, err := readLock(root)
 	if err != nil {
 		return err
 	}
-	pkgs, err := scanPackages(root)
-	if err != nil {
-		return err
-	}
-	inTree := make(map[string]string, len(pkgs))
+	inTree := make(map[string]Package, len(pkgs))
 	for _, p := range pkgs {
-		inTree[p.Module] = p.Dir
+		inTree[p.Module] = p
 	}
 
 	want := materializedEntries(lock)
@@ -50,10 +55,19 @@ func Install(e *Env) error {
 	// ambiguous, and it is exactly what the migration risks in the window
 	// between freezing history and moving the directories.
 	for _, e := range want {
-		if dir, clash := inTree[e.Module]; clash {
-			return fmt.Errorf("module %q is locked to %s but also declared by the working tree at %s, "+
-				"run `gnopm sync` to re-point it at the tree", e.Module, e.Source.Variant(), dir)
+		p, clash := inTree[e.Module]
+		if !clash {
+			continue
 		}
+		// sync never points the lock at a directory git ignores, so it cannot
+		// settle this one: one of the two copies has to go.
+		if p.GitIgnored {
+			return fmt.Errorf("module %q is locked to %s but also declared at %s, which git ignores.\n"+
+				"  Delete that copy, or its [[module]] block from %s, so it resolves from one place",
+				e.Module, e.Source.Variant(), p.Dir, lockFile)
+		}
+		return fmt.Errorf("module %q is locked to %s but also declared by the working tree at %s, "+
+			"run `gnopm sync` to re-point it at the tree", e.Module, e.Source.Variant(), p.Dir)
 	}
 
 	// The stamp is what makes install a no-op on an up-to-date tree, so it has
